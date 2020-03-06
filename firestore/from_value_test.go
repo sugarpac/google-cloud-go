@@ -208,7 +208,7 @@ func TestSetFromProtoValueNoJSON(t *testing.T) {
 		{&tmp, &pb.Value{ValueType: &pb.Value_TimestampValue{ptm}}, ptm},
 		{&lli, geoval(ll), ll},
 	} {
-		if err := setFromProtoValue(test.in, test.val, &Client{}); err != nil {
+		if err := SetFromProtoValue(test.in, test.val, &Client{}); err != nil {
 			t.Errorf("#%d: got error %v", i, err)
 			continue
 		}
@@ -254,7 +254,7 @@ func TestSetFromProtoValueErrors(t *testing.T) {
 		{new(float32),
 			&pb.Value{ValueType: &pb.Value_IntegerValue{math.MaxInt64}}}, // overflow
 	} {
-		err := setFromProtoValue(test.in, test.val, c)
+		err := SetFromProtoValue(test.in, test.val, c)
 		if err == nil {
 			t.Errorf("#%d: %v, %v: got nil, want error", i, test.in, test.val)
 		}
@@ -392,7 +392,7 @@ type protoTester struct {
 	c *Client
 }
 
-func (p protoTester) Set(x, val interface{}) error { return setFromProtoValue(x, val.(*pb.Value), p.c) }
+func (p protoTester) Set(x, val interface{}) error { return SetFromProtoValue(x, val.(*pb.Value), p.c) }
 func (protoTester) Null() interface{}              { return nullValue }
 func (protoTester) Int(i int) interface{}          { return intval(i) }
 func (protoTester) Float(f float64) interface{}    { return floatval(f) }

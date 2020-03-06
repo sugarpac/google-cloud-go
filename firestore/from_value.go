@@ -24,7 +24,7 @@ import (
 	pb "google.golang.org/genproto/googleapis/firestore/v1"
 )
 
-func setFromProtoValue(x interface{}, vproto *pb.Value, c *Client) error {
+func SetFromProtoValue(x interface{}, vproto *pb.Value, c *Client) error {
 	v := reflect.ValueOf(x)
 	if v.Kind() != reflect.Ptr || v.IsNil() {
 		return errors.New("firestore: nil or not a pointer")
