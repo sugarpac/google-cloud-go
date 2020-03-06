@@ -1,4 +1,4 @@
-module cloud.google.com/go
+module github.com/sugarpac/google-cloud-go
 
 go 1.11
 
