@@ -17,3 +17,5 @@ require (
 	google.golang.org/genproto v0.0.0-20200305110556-506484158171
 	google.golang.org/grpc v1.27.1
 )
+
+replace cloud.google.com/go => ../
