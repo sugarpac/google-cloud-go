@@ -169,10 +169,10 @@ func valueAtPath(fp FieldPath, m map[string]*pb.Value) (*pb.Value, error) {
 	return v, nil
 }
 
-// toProtoDocument converts a Go value to a Document proto.
+// ToProtoDocument converts a Go value to a Document proto.
 // Valid values are: map[string]T, struct, or pointer to a valid value.
 // It also returns a list DocumentTransforms.
-func toProtoDocument(x interface{}) (*pb.Document, []*pb.DocumentTransform_FieldTransform, error) {
+func ToProtoDocument(x interface{}) (*pb.Document, []*pb.DocumentTransform_FieldTransform, error) {
 	if x == nil {
 		return nil, nil, errors.New("firestore: nil document contents")
 	}

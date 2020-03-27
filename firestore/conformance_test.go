@@ -463,7 +463,7 @@ func convertDocSnapshot(ds *pb.DocSnapshot) (*DocumentSnapshot, error) {
 	if err != nil {
 		return nil, err
 	}
-	doc, transformPaths, err := toProtoDocument(data)
+	doc, transformPaths, err := ToProtoDocument(data)
 	if err != nil {
 		return nil, err
 	}

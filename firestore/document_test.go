@@ -41,7 +41,7 @@ func TestToProtoDocument(t *testing.T) {
 		{s{2}, &pb.Document{Fields: map[string]*pb.Value{"I": intval(2)}}, false},
 		{&s{3}, &pb.Document{Fields: map[string]*pb.Value{"I": intval(3)}}, false},
 	} {
-		got, _, gotErr := toProtoDocument(test.in)
+		got, _, gotErr := ToProtoDocument(test.in)
 		if (gotErr != nil) != test.wantErr {
 			t.Errorf("%v: got error %v, want %t", test.in, gotErr, test.wantErr)
 		}
