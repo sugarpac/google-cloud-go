@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newCloudSchedulerClientHook clientHook
+
 // CloudSchedulerCallOptions contains the retry settings for each method of CloudSchedulerClient.
 type CloudSchedulerCallOptions struct {
 	ListJobs  []gax.CallOption
@@ -146,7 +148,17 @@ type CloudSchedulerClient struct {
 // The Cloud Scheduler API allows external entities to reliably
 // schedule asynchronous jobs.
 func NewCloudSchedulerClient(ctx context.Context, opts ...option.ClientOption) (*CloudSchedulerClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultCloudSchedulerClientOptions(), opts...)...)
+	clientOpts := defaultCloudSchedulerClientOptions()
+
+	if newCloudSchedulerClientHook != nil {
+		hookOpts, err := newCloudSchedulerClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +220,7 @@ func (c *CloudSchedulerClient) ListJobs(ctx context.Context, req *schedulerpb.Li
 		}
 
 		it.Response = resp
-		return resp.Jobs, resp.NextPageToken, nil
+		return resp.GetJobs(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -219,8 +231,8 @@ func (c *CloudSchedulerClient) ListJobs(ctx context.Context, req *schedulerpb.Li
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -260,11 +272,11 @@ func (c *CloudSchedulerClient) CreateJob(ctx context.Context, req *schedulerpb.C
 
 // UpdateJob updates a job.
 //
-// If successful, the updated [Job][google.cloud.scheduler.v1beta1.Job] is returned. If the job does
+// If successful, the updated Job is returned. If the job does
 // not exist, NOT_FOUND is returned.
 //
 // If UpdateJob does not successfully return, it is possible for the
-// job to be in an [Job.State.UPDATE_FAILED][google.cloud.scheduler.v1beta1.Job.State.UPDATE_FAILED] state. A job in this state may
+// job to be in an Job.State.UPDATE_FAILED state. A job in this state may
 // not be executed. If this happens, retry the UpdateJob request
 // until a successful response is received.
 func (c *CloudSchedulerClient) UpdateJob(ctx context.Context, req *schedulerpb.UpdateJobRequest, opts ...gax.CallOption) (*schedulerpb.Job, error) {
@@ -299,9 +311,9 @@ func (c *CloudSchedulerClient) DeleteJob(ctx context.Context, req *schedulerpb.D
 // PauseJob pauses a job.
 //
 // If a job is paused then the system will stop executing the job
-// until it is re-enabled via [ResumeJob][google.cloud.scheduler.v1beta1.CloudScheduler.ResumeJob]. The
-// state of the job is stored in [state][google.cloud.scheduler.v1beta1.Job.state]; if paused it
-// will be set to [Job.State.PAUSED][google.cloud.scheduler.v1beta1.Job.State.PAUSED]. A job must be in [Job.State.ENABLED][google.cloud.scheduler.v1beta1.Job.State.ENABLED]
+// until it is re-enabled via ResumeJob. The
+// state of the job is stored in state; if paused it
+// will be set to Job.State.PAUSED. A job must be in Job.State.ENABLED
 // to be paused.
 func (c *CloudSchedulerClient) PauseJob(ctx context.Context, req *schedulerpb.PauseJobRequest, opts ...gax.CallOption) (*schedulerpb.Job, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
@@ -321,10 +333,10 @@ func (c *CloudSchedulerClient) PauseJob(ctx context.Context, req *schedulerpb.Pa
 
 // ResumeJob resume a job.
 //
-// This method reenables a job after it has been [Job.State.PAUSED][google.cloud.scheduler.v1beta1.Job.State.PAUSED]. The
-// state of a job is stored in [Job.state][google.cloud.scheduler.v1beta1.Job.state]; after calling this method it
-// will be set to [Job.State.ENABLED][google.cloud.scheduler.v1beta1.Job.State.ENABLED]. A job must be in
-// [Job.State.PAUSED][google.cloud.scheduler.v1beta1.Job.State.PAUSED] to be resumed.
+// This method reenables a job after it has been Job.State.PAUSED. The
+// state of a job is stored in Job.state; after calling this method it
+// will be set to Job.State.ENABLED. A job must be in
+// Job.State.PAUSED to be resumed.
 func (c *CloudSchedulerClient) ResumeJob(ctx context.Context, req *schedulerpb.ResumeJobRequest, opts ...gax.CallOption) (*schedulerpb.Job, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)

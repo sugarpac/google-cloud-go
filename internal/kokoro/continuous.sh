@@ -32,7 +32,7 @@ set -eo pipefail
 set -x
 
 # cd to project dir on Kokoro instance
-cd git/gocloud
+cd github/google-cloud-go
 
 go version
 
@@ -53,23 +53,27 @@ try3 go mod download
 go install github.com/jstemmer/go-junit-report
 ./internal/kokoro/vet.sh
 
+set +e # Run all tests, don't stop after the first failure.
 exit_code=0
 # Run tests and tee output to log file, to be pushed to GCS as artifact.
 for i in `find . -name go.mod`; do
   pushd `dirname $i`;
-    go test -race -v -timeout 30m ./... 2>&1 \
+    go test -race -v -timeout 45m ./... 2>&1 \
       | tee sponge_log.log
-    # Takes the kokoro output log (raw stdout) and creates a machine-parseable xml
-    # file (xUnit). Then it exits with whatever exit code the last command had.
+    # Takes the kokoro output log (raw stdout) and creates a machine-parseable
+    # xUnit XML file.
     cat sponge_log.log \
       | go-junit-report -set-exit-code > sponge_log.xml
+    # Add the exit codes together so we exit non-zero if any module fails.
     exit_code=$(($exit_code + $?))
   popd;
 done
 
 if [[ $KOKORO_BUILD_ARTIFACTS_SUBDIR = *"continuous"* ]]; then
   chmod +x $KOKORO_GFILE_DIR/linux_amd64/buildcop
-  $KOKORO_GFILE_DIR/linux_amd64/buildcop -logs_dir=$GOCLOUD_HOME
+  $KOKORO_GFILE_DIR/linux_amd64/buildcop -logs_dir=$GOCLOUD_HOME \
+    -repo=googleapis/google-cloud-go \
+    -commit_hash=$KOKORO_GITHUB_COMMIT_URL_google_cloud_go
 fi
 
 exit $exit_code

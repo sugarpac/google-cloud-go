@@ -35,6 +35,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newClientHook clientHook
+
 // CallOptions contains the retry settings for each method of Client.
 type CallOptions struct {
 	ExportAssets          []gax.CallOption
@@ -95,7 +97,17 @@ type Client struct {
 //
 // Asset service definition.
 func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultClientOptions(), opts...)...)
+	clientOpts := defaultClientOptions()
+
+	if newClientHook != nil {
+		hookOpts, err := newClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -145,7 +157,7 @@ func (c *Client) setGoogleClientInfo(keyval ...string) {
 // ExportAssets exports assets with time and resource types to a given Cloud Storage
 // location. The output format is newline-delimited JSON.
 // This API implements the
-// [google.longrunning.Operation][google.longrunning.Operation] API allowing
+// google.longrunning.Operation API allowing
 // you to keep track of the export.
 func (c *Client) ExportAssets(ctx context.Context, req *assetpb.ExportAssetsRequest, opts ...gax.CallOption) (*ExportAssetsOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))

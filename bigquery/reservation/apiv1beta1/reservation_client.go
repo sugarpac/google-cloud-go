@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newClientHook clientHook
+
 // CallOptions contains the retry settings for each method of Client.
 type CallOptions struct {
 	CreateReservation        []gax.CallOption
@@ -41,14 +43,20 @@ type CallOptions struct {
 	GetReservation           []gax.CallOption
 	DeleteReservation        []gax.CallOption
 	UpdateReservation        []gax.CallOption
+	CreateCapacityCommitment []gax.CallOption
 	ListCapacityCommitments  []gax.CallOption
 	GetCapacityCommitment    []gax.CallOption
 	DeleteCapacityCommitment []gax.CallOption
+	UpdateCapacityCommitment []gax.CallOption
+	SplitCapacityCommitment  []gax.CallOption
+	MergeCapacityCommitments []gax.CallOption
 	CreateAssignment         []gax.CallOption
 	ListAssignments          []gax.CallOption
 	DeleteAssignment         []gax.CallOption
 	SearchAssignments        []gax.CallOption
 	MoveAssignment           []gax.CallOption
+	GetBiReservation         []gax.CallOption
+	UpdateBiReservation      []gax.CallOption
 }
 
 func defaultClientOptions() []option.ClientOption {
@@ -100,7 +108,8 @@ func defaultCallOptions() *CallOptions {
 				})
 			}),
 		},
-		UpdateReservation: []gax.CallOption{},
+		UpdateReservation:        []gax.CallOption{},
+		CreateCapacityCommitment: []gax.CallOption{},
 		ListCapacityCommitments: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
@@ -137,7 +146,10 @@ func defaultCallOptions() *CallOptions {
 				})
 			}),
 		},
-		CreateAssignment: []gax.CallOption{},
+		UpdateCapacityCommitment: []gax.CallOption{},
+		SplitCapacityCommitment:  []gax.CallOption{},
+		MergeCapacityCommitments: []gax.CallOption{},
+		CreateAssignment:         []gax.CallOption{},
 		ListAssignments: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
@@ -175,6 +187,19 @@ func defaultCallOptions() *CallOptions {
 			}),
 		},
 		MoveAssignment: []gax.CallOption{},
+		GetBiReservation: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.DeadlineExceeded,
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
+		UpdateBiReservation: []gax.CallOption{},
 	}
 }
 
@@ -208,12 +233,22 @@ type Client struct {
 // projects/myproject/locations/US/reservations/reservationName.
 //
 // A capacity commitment is a way to purchase compute capacity for BigQuery jobs
-// (in the form of slots) with some minimum committed period of usage. A
-// capacity commitment resource exists as a child resource of the admin project
-// and location, e.g.:
+// (in the form of slots) with some committed period of usage. A capacity
+// commitment resource exists as a child resource of the admin project and
+// location, e.g.:
 // projects/myproject/locations/US/capacityCommitments/id.
 func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultClientOptions(), opts...)...)
+	clientOpts := defaultClientOptions()
+
+	if newClientHook != nil {
+		hookOpts, err := newClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -292,7 +327,7 @@ func (c *Client) ListReservations(ctx context.Context, req *reservationpb.ListRe
 		}
 
 		it.Response = resp
-		return resp.Reservations, resp.NextPageToken, nil
+		return resp.GetReservations(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -303,8 +338,8 @@ func (c *Client) ListReservations(ctx context.Context, req *reservationpb.ListRe
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -357,6 +392,23 @@ func (c *Client) UpdateReservation(ctx context.Context, req *reservationpb.Updat
 	return resp, nil
 }
 
+// CreateCapacityCommitment creates a new capacity commitment resource.
+func (c *Client) CreateCapacityCommitment(ctx context.Context, req *reservationpb.CreateCapacityCommitmentRequest, opts ...gax.CallOption) (*reservationpb.CapacityCommitment, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.CreateCapacityCommitment[0:len(c.CallOptions.CreateCapacityCommitment):len(c.CallOptions.CreateCapacityCommitment)], opts...)
+	var resp *reservationpb.CapacityCommitment
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.CreateCapacityCommitment(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // ListCapacityCommitments lists all the capacity commitments for the admin project.
 func (c *Client) ListCapacityCommitments(ctx context.Context, req *reservationpb.ListCapacityCommitmentsRequest, opts ...gax.CallOption) *CapacityCommitmentIterator {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
@@ -382,7 +434,7 @@ func (c *Client) ListCapacityCommitments(ctx context.Context, req *reservationpb
 		}
 
 		it.Response = resp
-		return resp.CapacityCommitments, resp.NextPageToken, nil
+		return resp.GetCapacityCommitments(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -393,8 +445,8 @@ func (c *Client) ListCapacityCommitments(ctx context.Context, req *reservationpb
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -430,9 +482,105 @@ func (c *Client) DeleteCapacityCommitment(ctx context.Context, req *reservationp
 	return err
 }
 
-// CreateAssignment returns google.rpc.Code.PERMISSION_DENIED if user does not have
+// UpdateCapacityCommitment updates an existing capacity commitment.
+//
+// Only plan and renewal_plan fields can be updated.
+//
+// Plan can only be changed to a plan of a longer commitment period.
+// Attempting to change to a plan with shorter commitment period will fail
+// with the error code google.rpc.Code.FAILED_PRECONDITION.
+func (c *Client) UpdateCapacityCommitment(ctx context.Context, req *reservationpb.UpdateCapacityCommitmentRequest, opts ...gax.CallOption) (*reservationpb.CapacityCommitment, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "capacity_commitment.name", url.QueryEscape(req.GetCapacityCommitment().GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.UpdateCapacityCommitment[0:len(c.CallOptions.UpdateCapacityCommitment):len(c.CallOptions.UpdateCapacityCommitment)], opts...)
+	var resp *reservationpb.CapacityCommitment
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.UpdateCapacityCommitment(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// SplitCapacityCommitment splits capacity commitment to two commitments of the same plan and
+// commitment_end_time.
+//
+// A common use case is to enable downgrading commitments.
+//
+// For example, in order to downgrade from 10000 slots to 8000, you might
+// split a 10000 capacity commitment into commitments of 2000 and 8000. Then,
+// you would change the plan of the first one to FLEX and then delete it.
+func (c *Client) SplitCapacityCommitment(ctx context.Context, req *reservationpb.SplitCapacityCommitmentRequest, opts ...gax.CallOption) (*reservationpb.SplitCapacityCommitmentResponse, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.SplitCapacityCommitment[0:len(c.CallOptions.SplitCapacityCommitment):len(c.CallOptions.SplitCapacityCommitment)], opts...)
+	var resp *reservationpb.SplitCapacityCommitmentResponse
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.SplitCapacityCommitment(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// MergeCapacityCommitments merges capacity commitments of the same plan into a single commitment.
+//
+// The resulting capacity commitment has the greater commitment_end_time
+// out of the to-be-merged capacity commitments.
+//
+// Attempting to merge capacity commitments of different plan will fail
+// with the error code google.rpc.Code.FAILED_PRECONDITION.
+func (c *Client) MergeCapacityCommitments(ctx context.Context, req *reservationpb.MergeCapacityCommitmentsRequest, opts ...gax.CallOption) (*reservationpb.CapacityCommitment, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.MergeCapacityCommitments[0:len(c.CallOptions.MergeCapacityCommitments):len(c.CallOptions.MergeCapacityCommitments)], opts...)
+	var resp *reservationpb.CapacityCommitment
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.MergeCapacityCommitments(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// CreateAssignment creates an assignment object which allows the given project to submit jobs
+// of a certain type using slots from the specified reservation.
+//
+// Currently a
+// resource (project, folder, organization) can only have one assignment per
+// each (job_type, location) combination, and that reservation will be used
+// for all jobs of the matching type.
+//
+// Different assignments can be created on different levels of the
+// projects, folders or organization hierarchy.  During query execution,
+// the assignment is looked up at the project, folder and organization levels
+// in that order. The first assignment found is applied to the query.
+//
+// When creating assignments, it does not matter if other assignments exist at
+// higher levels.
+//
+// Example:
+//
+//   The organization organizationA contains two projects, project1
+//   and project2.
+//
+//   Assignments for all three entities (organizationA, project1, and
+//   project2) could all be created and mapped to the same or different
+//   reservations.
+//
+// Returns google.rpc.Code.PERMISSION_DENIED if user does not have
 // ‘bigquery.admin’ permissions on the project using the reservation
 // and the project that owns this reservation.
+//
 // Returns google.rpc.Code.INVALID_ARGUMENT when location of the assignment
 // does not match location of the reservation.
 func (c *Client) CreateAssignment(ctx context.Context, req *reservationpb.CreateAssignmentRequest, opts ...gax.CallOption) (*reservationpb.Assignment, error) {
@@ -452,17 +600,28 @@ func (c *Client) CreateAssignment(ctx context.Context, req *reservationpb.Create
 }
 
 // ListAssignments lists assignments.
-// Only explicitly created assignments will be returned. E.g:
-// organizationA contains project1 and project2. Reservation res1 exists.
-// CreateAssignment was invoked previously and following assignments were
-// created explicitly:
-// <organizationA, res1>
-// <project1, res1>
-// Then this API will just return the above two assignments for reservation
-// res1, and no expansion/merge will happen. Wildcard “-” can be used for
+//
+// Only explicitly created assignments will be returned.
+//
+// Example:
+//
+//   Organization organizationA contains two projects, project1 and
+//   project2.
+//
+//   Reservation res1 exists and was created previously.
+//
+//   CreateAssignment was used previously to define the following
+//   associations between entities and reservations: <organizationA, res1>
+//   and <project1, res1>
+//
+// In this example, ListAssignments will just return the above two assignments
+// for reservation res1, and no expansion/merge will happen.
+//
+// The wildcard “-” can be used for
 // reservations in the request. In that case all assignments belongs to the
-// specified project and location will be listed. Note
-// “-” cannot be used for projects nor locations.
+// specified project and location will be listed.
+//
+// Note "-" cannot be used for projects nor locations.
 func (c *Client) ListAssignments(ctx context.Context, req *reservationpb.ListAssignmentsRequest, opts ...gax.CallOption) *AssignmentIterator {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -487,7 +646,7 @@ func (c *Client) ListAssignments(ctx context.Context, req *reservationpb.ListAss
 		}
 
 		it.Response = resp
-		return resp.Assignments, resp.NextPageToken, nil
+		return resp.GetAssignments(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -498,21 +657,28 @@ func (c *Client) ListAssignments(ctx context.Context, req *reservationpb.ListAss
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
 // DeleteAssignment deletes a assignment. No expansion will happen.
-// E.g:
-// organizationA contains project1 and project2. Reservation res1 exists.
-// CreateAssignment was invoked previously and following assignments were
-// created explicitly:
-// <organizationA, res1>
-// <project1, res1>
-// Then deletion of <organizationA, res1> won’t affect <project1, res1>. After
-// deletion of <organizationA, res1>, queries from project1 will still use
-// res1, while queries from project2 will use on-demand mode.
+//
+// Example:
+//
+//   Organization organizationA contains two projects, project1 and
+//   project2.
+//
+//   Reservation res1 exists and was created previously.
+//
+//   CreateAssignment was used previously to define the following
+//   associations between entities and reservations: <organizationA, res1>
+//   and <project1, res1>
+//
+// In this example, deletion of the <organizationA, res1> assignment won’t
+// affect the other assignment <project1, res1>. After said deletion,
+// queries from project1 will still use res1 while queries from
+// project2 will switch to use on-demand mode.
 func (c *Client) DeleteAssignment(ctx context.Context, req *reservationpb.DeleteAssignmentRequest, opts ...gax.CallOption) error {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -531,10 +697,15 @@ func (c *Client) DeleteAssignment(ctx context.Context, req *reservationpb.Delete
 // Assignments created on the project will be returned if they exist.
 //
 // Otherwise assignments created on the closest ancestor will be
-// returned. 3) Assignments for different JobTypes will all be returned.
-// Same logic applies if the request is about a folder.
+// returned.
+//
+// Assignments for different JobTypes will all be returned.
+//
+// The same logic applies if the request is about a folder.
+//
 // If the request is about an organization, then assignments created on the
 // organization will be returned (organization doesn’t have ancestors).
+//
 // Comparing to ListAssignments, there are some behavior
 // differences:
 //
@@ -542,9 +713,10 @@ func (c *Client) DeleteAssignment(ctx context.Context, req *reservationpb.Delete
 //
 // Hierarchy lookup (project->folder->organization) happens in this API.
 //
-// Parent here is projects//locations/, instead of
-// projects/*/locations/reservations/.
-// Note “-” cannot be used for projects
+// Parent here is projects/*/locations/*, instead of
+// projects/*/locations/*reservations/*.
+//
+// Note "-" cannot be used for projects
 // nor locations.
 func (c *Client) SearchAssignments(ctx context.Context, req *reservationpb.SearchAssignmentsRequest, opts ...gax.CallOption) *AssignmentIterator {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
@@ -570,7 +742,7 @@ func (c *Client) SearchAssignments(ctx context.Context, req *reservationpb.Searc
 		}
 
 		it.Response = resp
-		return resp.Assignments, resp.NextPageToken, nil
+		return resp.GetAssignments(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -581,17 +753,16 @@ func (c *Client) SearchAssignments(ctx context.Context, req *reservationpb.Searc
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
-// MoveAssignment moves a assignment under a new reservation. Customers can do this by
-// deleting the existing assignment followed by creating another assignment
-// under the new reservation, but this method provides a transactional way to
-// do so, to make sure the assignee always has an associated reservation.
-// Without the method customers might see some queries run on-demand which
-// might be unexpected.
+// MoveAssignment moves an assignment under a new reservation.
+//
+// This differs from removing an existing assignment and recreating a new one
+// by providing a transactional change that ensures an assignee always has an
+// associated reservation.
 func (c *Client) MoveAssignment(ctx context.Context, req *reservationpb.MoveAssignmentRequest, opts ...gax.CallOption) (*reservationpb.Assignment, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -600,6 +771,47 @@ func (c *Client) MoveAssignment(ctx context.Context, req *reservationpb.MoveAssi
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
 		var err error
 		resp, err = c.client.MoveAssignment(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// GetBiReservation retrieves a BI reservation.
+func (c *Client) GetBiReservation(ctx context.Context, req *reservationpb.GetBiReservationRequest, opts ...gax.CallOption) (*reservationpb.BiReservation, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.GetBiReservation[0:len(c.CallOptions.GetBiReservation):len(c.CallOptions.GetBiReservation)], opts...)
+	var resp *reservationpb.BiReservation
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.GetBiReservation(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// UpdateBiReservation updates a BI reservation.
+//
+// Only fields specified in the field_mask are updated.
+//
+// A singleton BI reservation always exists with default size 0.
+// In order to reserve BI capacity it needs to be updated to an amount
+// greater than 0. In order to release BI capacity reservation size
+// must be set to 0.
+func (c *Client) UpdateBiReservation(ctx context.Context, req *reservationpb.UpdateBiReservationRequest, opts ...gax.CallOption) (*reservationpb.BiReservation, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "reservation.name", url.QueryEscape(req.GetReservation().GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.UpdateBiReservation[0:len(c.CallOptions.UpdateBiReservation):len(c.CallOptions.UpdateBiReservation)], opts...)
+	var resp *reservationpb.BiReservation
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.UpdateBiReservation(ctx, req, settings.GRPC...)
 		return err
 	}, opts...)
 	if err != nil {

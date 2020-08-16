@@ -39,6 +39,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newClientHook clientHook
+
 // CallOptions contains the retry settings for each method of Client.
 type CallOptions struct {
 	CreateSource               []gax.CallOption
@@ -225,7 +227,7 @@ func defaultCallOptions() *CallOptions {
 	}
 }
 
-// Client is a client for interacting with Cloud Security Command Center API.
+// Client is a client for interacting with Security Command Center API.
 //
 // Methods, except Close, may be called concurrently. However, fields must not be modified concurrently with method calls.
 type Client struct {
@@ -251,7 +253,17 @@ type Client struct {
 //
 // V1p1Beta1 APIs for Security Center service.
 func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultClientOptions(), opts...)...)
+	clientOpts := defaultClientOptions()
+
+	if newClientHook != nil {
+		hookOpts, err := newClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -457,7 +469,7 @@ func (c *Client) GroupAssets(ctx context.Context, req *securitycenterpb.GroupAss
 		}
 
 		it.Response = resp
-		return resp.GroupByResults, resp.NextPageToken, nil
+		return resp.GetGroupByResults(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -468,8 +480,8 @@ func (c *Client) GroupAssets(ctx context.Context, req *securitycenterpb.GroupAss
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -502,7 +514,7 @@ func (c *Client) GroupFindings(ctx context.Context, req *securitycenterpb.GroupF
 		}
 
 		it.Response = resp
-		return resp.GroupByResults, resp.NextPageToken, nil
+		return resp.GetGroupByResults(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -513,8 +525,8 @@ func (c *Client) GroupFindings(ctx context.Context, req *securitycenterpb.GroupF
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -543,7 +555,7 @@ func (c *Client) ListAssets(ctx context.Context, req *securitycenterpb.ListAsset
 		}
 
 		it.Response = resp
-		return resp.ListAssetsResults, resp.NextPageToken, nil
+		return resp.GetListAssetsResults(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -554,8 +566,8 @@ func (c *Client) ListAssets(ctx context.Context, req *securitycenterpb.ListAsset
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -587,7 +599,7 @@ func (c *Client) ListFindings(ctx context.Context, req *securitycenterpb.ListFin
 		}
 
 		it.Response = resp
-		return resp.ListFindingsResults, resp.NextPageToken, nil
+		return resp.GetListFindingsResults(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -598,8 +610,8 @@ func (c *Client) ListFindings(ctx context.Context, req *securitycenterpb.ListFin
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -628,7 +640,7 @@ func (c *Client) ListNotificationConfigs(ctx context.Context, req *securitycente
 		}
 
 		it.Response = resp
-		return resp.NotificationConfigs, resp.NextPageToken, nil
+		return resp.GetNotificationConfigs(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -639,8 +651,8 @@ func (c *Client) ListNotificationConfigs(ctx context.Context, req *securitycente
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -669,7 +681,7 @@ func (c *Client) ListSources(ctx context.Context, req *securitycenterpb.ListSour
 		}
 
 		it.Response = resp
-		return resp.Sources, resp.NextPageToken, nil
+		return resp.GetSources(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -680,8 +692,8 @@ func (c *Client) ListSources(ctx context.Context, req *securitycenterpb.ListSour
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -778,7 +790,8 @@ func (c *Client) UpdateFinding(ctx context.Context, req *securitycenterpb.Update
 	return resp, nil
 }
 
-// UpdateNotificationConfig updates a notification config.
+// UpdateNotificationConfig updates a notification config. The following update
+// fields are allowed: description, pubsub_topic, streaming_config.filter
 func (c *Client) UpdateNotificationConfig(ctx context.Context, req *securitycenterpb.UpdateNotificationConfigRequest, opts ...gax.CallOption) (*securitycenterpb.NotificationConfig, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "notification_config.name", url.QueryEscape(req.GetNotificationConfig().GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)

@@ -33,6 +33,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newPolicyTagManagerClientHook clientHook
+
 // PolicyTagManagerCallOptions contains the retry settings for each method of PolicyTagManagerClient.
 type PolicyTagManagerCallOptions struct {
 	CreateTaxonomy     []gax.CallOption
@@ -100,7 +102,17 @@ type PolicyTagManagerClient struct {
 // The policy tag manager API service allows clients to manage their taxonomies
 // and policy tags.
 func NewPolicyTagManagerClient(ctx context.Context, opts ...option.ClientOption) (*PolicyTagManagerClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultPolicyTagManagerClientOptions(), opts...)...)
+	clientOpts := defaultPolicyTagManagerClientOptions()
+
+	if newPolicyTagManagerClientHook != nil {
+		hookOpts, err := newPolicyTagManagerClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -211,7 +223,7 @@ func (c *PolicyTagManagerClient) ListTaxonomies(ctx context.Context, req *dataca
 		}
 
 		it.Response = resp
-		return resp.Taxonomies, resp.NextPageToken, nil
+		return resp.GetTaxonomies(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -222,8 +234,8 @@ func (c *PolicyTagManagerClient) ListTaxonomies(ctx context.Context, req *dataca
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -316,7 +328,7 @@ func (c *PolicyTagManagerClient) ListPolicyTags(ctx context.Context, req *dataca
 		}
 
 		it.Response = resp
-		return resp.PolicyTags, resp.NextPageToken, nil
+		return resp.GetPolicyTags(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -327,8 +339,8 @@ func (c *PolicyTagManagerClient) ListPolicyTags(ctx context.Context, req *dataca
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

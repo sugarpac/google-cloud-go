@@ -25,14 +25,16 @@ import (
 )
 
 // TODO: More Position fields throughout; maybe in Query/Select.
+// TODO: Perhaps identifiers in the AST should be ID-typed.
 
 // CreateTable represents a CREATE TABLE statement.
 // https://cloud.google.com/spanner/docs/data-definition-language#create_table
 type CreateTable struct {
-	Name       string
-	Columns    []ColumnDef
-	PrimaryKey []KeyPart
-	Interleave *Interleave
+	Name        string
+	Columns     []ColumnDef
+	Constraints []TableConstraint
+	PrimaryKey  []KeyPart
+	Interleave  *Interleave
 
 	Position Position // position of the "CREATE" token
 }
@@ -45,7 +47,25 @@ func (ct *CreateTable) clearOffset() {
 		// Mutate in place.
 		ct.Columns[i].clearOffset()
 	}
+	for i := range ct.Constraints {
+		// Mutate in place.
+		ct.Constraints[i].clearOffset()
+	}
 	ct.Position.Offset = 0
+}
+
+// TableConstraint represents a constraint on a table.
+type TableConstraint struct {
+	Name       string // may be empty
+	ForeignKey ForeignKey
+
+	Position Position // position of the "CONSTRAINT" or "FOREIGN" token
+}
+
+func (tc TableConstraint) Pos() Position { return tc.Position }
+func (tc *TableConstraint) clearOffset() {
+	tc.Position.Offset = 0
+	tc.ForeignKey.clearOffset()
 }
 
 // Interleave represents an interleave clause of a CREATE TABLE statement.
@@ -118,8 +138,8 @@ func (at *AlterTable) clearOffset() {
 	case AddColumn:
 		alt.Def.clearOffset()
 		at.Alteration = alt
-	case AlterColumn:
-		alt.Def.clearOffset()
+	case AddConstraint:
+		alt.Constraint.clearOffset()
 		at.Alteration = alt
 	}
 	at.Position.Offset = 0
@@ -131,15 +151,37 @@ type TableAlteration interface {
 	SQL() string
 }
 
-func (AddColumn) isTableAlteration()   {}
-func (DropColumn) isTableAlteration()  {}
-func (SetOnDelete) isTableAlteration() {}
-func (AlterColumn) isTableAlteration() {}
+func (AddColumn) isTableAlteration()      {}
+func (DropColumn) isTableAlteration()     {}
+func (AddConstraint) isTableAlteration()  {}
+func (DropConstraint) isTableAlteration() {}
+func (SetOnDelete) isTableAlteration()    {}
+func (AlterColumn) isTableAlteration()    {}
 
 type AddColumn struct{ Def ColumnDef }
 type DropColumn struct{ Name string }
+type AddConstraint struct{ Constraint TableConstraint }
+type DropConstraint struct{ Name string }
 type SetOnDelete struct{ Action OnDelete }
-type AlterColumn struct{ Def ColumnDef }
+type AlterColumn struct {
+	Name       string
+	Alteration ColumnAlteration
+}
+
+type ColumnAlteration interface {
+	isColumnAlteration()
+	SQL() string
+}
+
+func (SetColumnType) isColumnAlteration()    {}
+func (SetColumnOptions) isColumnAlteration() {}
+
+type SetColumnType struct {
+	Type    Type
+	NotNull bool
+}
+
+type SetColumnOptions struct{ Options ColumnOptions }
 
 type OnDelete int
 
@@ -169,17 +211,36 @@ type ColumnDef struct {
 	Type    Type
 	NotNull bool
 
-	// AllowCommitTimestamp represents a column OPTIONS.
-	// `true` if query is `OPTIONS (allow_commit_timestamp = true)`
-	// `false` if query is `OPTIONS (allow_commit_timestamp = null)`
-	// `nil` if there are no OPTIONS
-	AllowCommitTimestamp *bool
+	Options ColumnOptions
 
 	Position Position // position of the column name
 }
 
 func (cd ColumnDef) Pos() Position { return cd.Position }
 func (cd *ColumnDef) clearOffset() { cd.Position.Offset = 0 }
+
+// ColumnOptions represents options on a column as part of a
+// CREATE TABLE or ALTER TABLE statement.
+type ColumnOptions struct {
+	// AllowCommitTimestamp represents a column OPTIONS.
+	// `true` if query is `OPTIONS (allow_commit_timestamp = true)`
+	// `false` if query is `OPTIONS (allow_commit_timestamp = null)`
+	// `nil` if there are no OPTIONS
+	AllowCommitTimestamp *bool
+}
+
+// ForeignKey represents a foreign key definition as part of a CREATE TABLE
+// or ALTER TABLE statement.
+type ForeignKey struct {
+	Columns    []string
+	RefTable   string
+	RefColumns []string
+
+	Position Position // position of the "FOREIGN" token
+}
+
+func (fk ForeignKey) Pos() Position { return fk.Position }
+func (fk *ForeignKey) clearOffset() { fk.Position.Offset = 0 }
 
 // Type represents a column type.
 type Type struct {
@@ -214,7 +275,8 @@ type KeyPart struct {
 type Query struct {
 	Select Select
 	Order  []Order
-	Limit  Limit
+
+	Limit, Offset LiteralOrParam
 }
 
 // Select represents a SELECT statement.
@@ -235,8 +297,10 @@ type Select struct {
 
 type SelectFrom struct {
 	// This only supports a FROM clause directly from a table.
-	Table       string
-	TableSample *TableSample
+	Table string
+	Alias string // empty if not aliased
+
+	TableSample *TableSample // TODO: This isn't part of from_item; move elsewhere.
 }
 
 type Order struct {
@@ -274,8 +338,9 @@ type Expr interface {
 	SQL() string
 }
 
-type Limit interface {
-	isLimit()
+// LiteralOrParam is implemented by integer literal and parameter values.
+type LiteralOrParam interface {
+	isLiteralOrParam()
 	SQL() string
 }
 
@@ -320,8 +385,8 @@ const (
 )
 
 type ComparisonOp struct {
-	LHS, RHS Expr
 	Op       ComparisonOperator
+	LHS, RHS Expr
 
 	// RHS2 is the third operand for BETWEEN.
 	// "<LHS> BETWEEN <RHS> AND <RHS2>".
@@ -345,6 +410,18 @@ const (
 	Between
 	NotBetween
 )
+
+type InOp struct {
+	LHS    Expr
+	Neg    bool
+	RHS    []Expr
+	Unnest bool
+
+	// TODO: support subquery form
+}
+
+func (InOp) isBoolExpr() {} // usually
+func (InOp) isExpr()     {}
 
 type IsOp struct {
 	LHS Expr
@@ -389,9 +466,9 @@ func (ID) isExpr()     {}
 // Param represents a query parameter.
 type Param string
 
-func (Param) isBoolExpr() {} // possibly bool
-func (Param) isExpr()     {}
-func (Param) isLimit()    {}
+func (Param) isBoolExpr()       {} // possibly bool
+func (Param) isExpr()           {}
+func (Param) isLiteralOrParam() {}
 
 type BoolLiteral bool
 
@@ -415,8 +492,8 @@ func (NullLiteral) isExpr()   {}
 // https://cloud.google.com/spanner/docs/lexical#integer-literals
 type IntegerLiteral int64
 
-func (IntegerLiteral) isLimit() {}
-func (IntegerLiteral) isExpr()  {}
+func (IntegerLiteral) isLiteralOrParam() {}
+func (IntegerLiteral) isExpr()           {}
 
 // FloatLiteral represents a floating point literal.
 // https://cloud.google.com/spanner/docs/lexical#floating-point-literals

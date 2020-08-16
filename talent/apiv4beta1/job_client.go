@@ -37,6 +37,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newJobClientHook clientHook
+
 // JobCallOptions contains the retry settings for each method of JobClient.
 type JobCallOptions struct {
 	CreateJob          []gax.CallOption
@@ -135,7 +137,17 @@ type JobClient struct {
 //
 // A service handles job management, including job CRUD, enumeration and search.
 func NewJobClient(ctx context.Context, opts ...option.ClientOption) (*JobClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultJobClientOptions(), opts...)...)
+	clientOpts := defaultJobClientOptions()
+
+	if newJobClientHook != nil {
+		hookOpts, err := newJobClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -294,7 +306,7 @@ func (c *JobClient) DeleteJob(ctx context.Context, req *talentpb.DeleteJobReques
 	return err
 }
 
-// BatchDeleteJobs deletes a list of [Job][google.cloud.talent.v4beta1.Job]s by filter.
+// BatchDeleteJobs deletes a list of Jobs by filter.
 func (c *JobClient) BatchDeleteJobs(ctx context.Context, req *talentpb.BatchDeleteJobsRequest, opts ...gax.CallOption) error {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -332,7 +344,7 @@ func (c *JobClient) ListJobs(ctx context.Context, req *talentpb.ListJobsRequest,
 		}
 
 		it.Response = resp
-		return resp.Jobs, resp.NextPageToken, nil
+		return resp.GetJobs(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -343,14 +355,14 @@ func (c *JobClient) ListJobs(ctx context.Context, req *talentpb.ListJobsRequest,
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
-// SearchJobs searches for jobs using the provided [SearchJobsRequest][google.cloud.talent.v4beta1.SearchJobsRequest].
+// SearchJobs searches for jobs using the provided SearchJobsRequest.
 //
-// This call constrains the [visibility][google.cloud.talent.v4beta1.Job.visibility] of jobs
+// This call constrains the visibility of jobs
 // present in the database, and only returns jobs that the caller has
 // permission to search against.
 func (c *JobClient) SearchJobs(ctx context.Context, req *talentpb.SearchJobsRequest, opts ...gax.CallOption) (*talentpb.SearchJobsResponse, error) {
@@ -369,14 +381,14 @@ func (c *JobClient) SearchJobs(ctx context.Context, req *talentpb.SearchJobsRequ
 	return resp, nil
 }
 
-// SearchJobsForAlert searches for jobs using the provided [SearchJobsRequest][google.cloud.talent.v4beta1.SearchJobsRequest].
+// SearchJobsForAlert searches for jobs using the provided SearchJobsRequest.
 //
 // This API call is intended for the use case of targeting passive job
 // seekers (for example, job seekers who have signed up to receive email
 // alerts about potential job opportunities), and has different algorithmic
 // adjustments that are targeted to passive job seekers.
 //
-// This call constrains the [visibility][google.cloud.talent.v4beta1.Job.visibility] of jobs
+// This call constrains the visibility of jobs
 // present in the database, and only returns jobs the caller has
 // permission to search against.
 func (c *JobClient) SearchJobsForAlert(ctx context.Context, req *talentpb.SearchJobsRequest, opts ...gax.CallOption) *SearchJobsResponse_MatchingJobIterator {
@@ -403,7 +415,7 @@ func (c *JobClient) SearchJobsForAlert(ctx context.Context, req *talentpb.Search
 		}
 
 		it.Response = resp
-		return resp.MatchingJobs, resp.NextPageToken, nil
+		return resp.GetMatchingJobs(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -414,8 +426,8 @@ func (c *JobClient) SearchJobsForAlert(ctx context.Context, req *talentpb.Search
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

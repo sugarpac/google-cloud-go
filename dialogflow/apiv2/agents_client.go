@@ -38,6 +38,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newAgentsClientHook clientHook
+
 // AgentsCallOptions contains the retry settings for each method of AgentsClient.
 type AgentsCallOptions struct {
 	GetAgent            []gax.CallOption
@@ -67,7 +69,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -79,7 +80,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -91,7 +91,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -103,7 +102,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -115,7 +113,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -127,7 +124,6 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -135,12 +131,21 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 				})
 			}),
 		},
-		ImportAgent: []gax.CallOption{},
+		ImportAgent: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
 		RestoreAgent: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -148,7 +153,17 @@ func defaultAgentsCallOptions() *AgentsCallOptions {
 				})
 			}),
 		},
-		GetValidationResult: []gax.CallOption{},
+		GetValidationResult: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
 	}
 }
 
@@ -176,36 +191,19 @@ type AgentsClient struct {
 
 // NewAgentsClient creates a new agents client.
 //
-// Agents are best described as Natural Language Understanding (NLU) modules
-// that transform user requests into actionable data. You can include agents
-// in your app, product, or service to determine user intent and respond to the
-// user in a natural way.
-//
-// After you create an agent, you can add [Intents][google.cloud.dialogflow.v2.Intents], [Contexts][google.cloud.dialogflow.v2.Contexts],
-// [Entity Types][google.cloud.dialogflow.v2.EntityTypes], [Webhooks][google.cloud.dialogflow.v2.WebhookRequest], and so on to
-// manage the flow of a conversation and match user input to predefined intents
-// and actions.
-//
-// You can create an agent using both Dialogflow Standard Edition and
-// Dialogflow Enterprise Edition. For details, see
-// Dialogflow
-// Editions (at https://cloud.google.com/dialogflow/docs/editions).
-//
-// You can save your agent for backup or versioning by exporting the agent by
-// using the [ExportAgent][google.cloud.dialogflow.v2.Agents.ExportAgent] method. You can import a saved
-// agent by using the [ImportAgent][google.cloud.dialogflow.v2.Agents.ImportAgent] method.
-//
-// Dialogflow provides several
-// prebuilt
-// agents (at https://cloud.google.com/dialogflow/docs/agents-prebuilt)
-// for common conversation scenarios such as determining a date and time,
-// converting currency, and so on.
-//
-// For more information about agents, see the
-// Dialogflow
-// documentation (at https://cloud.google.com/dialogflow/docs/agents-overview).
+// Service for managing Agents.
 func NewAgentsClient(ctx context.Context, opts ...option.ClientOption) (*AgentsClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultAgentsClientOptions(), opts...)...)
+	clientOpts := defaultAgentsClientOptions()
+
+	if newAgentsClientHook != nil {
+		hookOpts, err := newAgentsClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -330,7 +328,7 @@ func (c *AgentsClient) SearchAgents(ctx context.Context, req *dialogflowpb.Searc
 		}
 
 		it.Response = resp
-		return resp.Agents, resp.NextPageToken, nil
+		return resp.GetAgents(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -341,14 +339,14 @@ func (c *AgentsClient) SearchAgents(ctx context.Context, req *dialogflowpb.Searc
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
 // TrainAgent trains the specified agent.
 //
-// Operation <response: [google.protobuf.Empty][google.protobuf.Empty]>
+// Operation <response: google.protobuf.Empty>
 func (c *AgentsClient) TrainAgent(ctx context.Context, req *dialogflowpb.TrainAgentRequest, opts ...gax.CallOption) (*TrainAgentOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -369,7 +367,7 @@ func (c *AgentsClient) TrainAgent(ctx context.Context, req *dialogflowpb.TrainAg
 
 // ExportAgent exports the specified agent to a ZIP file.
 //
-// Operation <response: [ExportAgentResponse][google.cloud.dialogflow.v2.ExportAgentResponse]>
+// Operation <response: ExportAgentResponse>
 func (c *AgentsClient) ExportAgent(ctx context.Context, req *dialogflowpb.ExportAgentRequest, opts ...gax.CallOption) (*ExportAgentOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -392,9 +390,15 @@ func (c *AgentsClient) ExportAgent(ctx context.Context, req *dialogflowpb.Export
 //
 // Uploads new intents and entity types without deleting the existing ones.
 // Intents and entity types with the same name are replaced with the new
-// versions from ImportAgentRequest.
+// versions from ImportAgentRequest. After the import, the imported draft
+// agent will be trained automatically (unless disabled in agent settings).
+// However, once the import is done, training may not be completed yet. Please
+// call TrainAgent and wait for the operation it returns in order to train
+// explicitly.
 //
-// Operation <response: [google.protobuf.Empty][google.protobuf.Empty]>
+// Operation <response: google.protobuf.Empty>
+// An operation which tracks when importing is complete. It only tracks
+// when the draft agent is updated not when it is done training.
 func (c *AgentsClient) ImportAgent(ctx context.Context, req *dialogflowpb.ImportAgentRequest, opts ...gax.CallOption) (*ImportAgentOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -416,9 +420,15 @@ func (c *AgentsClient) ImportAgent(ctx context.Context, req *dialogflowpb.Import
 // RestoreAgent restores the specified agent from a ZIP file.
 //
 // Replaces the current agent version with a new one. All the intents and
-// entity types in the older version are deleted.
+// entity types in the older version are deleted. After the restore, the
+// restored draft agent will be trained automatically (unless disabled in
+// agent settings). However, once the restore is done, training may not be
+// completed yet. Please call TrainAgent and wait for the operation it
+// returns in order to train explicitly.
 //
-// Operation <response: [google.protobuf.Empty][google.protobuf.Empty]>
+// Operation <response: google.protobuf.Empty>
+// An operation which tracks when restoring is complete. It only tracks
+// when the draft agent is updated not when it is done training.
 func (c *AgentsClient) RestoreAgent(ctx context.Context, req *dialogflowpb.RestoreAgentRequest, opts ...gax.CallOption) (*RestoreAgentOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)

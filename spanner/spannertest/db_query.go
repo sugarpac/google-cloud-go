@@ -39,7 +39,7 @@ The order of operations among those supported by Cloud Spanner is
 	SELECT
 	DISTINCT
 	ORDER BY
-	OFFSET [TODO]
+	OFFSET
 	LIMIT
 */
 
@@ -129,7 +129,7 @@ func toRawIter(ri rowIter) (*rawIter, error) {
 		} else if err != nil {
 			return nil, err
 		}
-		raw.rows = append(raw.rows, row)
+		raw.rows = append(raw.rows, row.copyAllData())
 	}
 	return raw, nil
 }
@@ -223,6 +223,28 @@ func (di *distinctIter) Next() (row, error) {
 	}
 }
 
+// offsetIter applies an OFFSET clause.
+type offsetIter struct {
+	ri   rowIter
+	skip int64
+}
+
+func (oi *offsetIter) Cols() []colInfo { return oi.ri.Cols() }
+func (oi *offsetIter) Next() (row, error) {
+	for oi.skip > 0 {
+		_, err := oi.ri.Next()
+		if err != nil {
+			return nil, err
+		}
+		oi.skip--
+	}
+	row, err := oi.ri.Next()
+	if err != nil {
+		return nil, err
+	}
+	return row, nil
+}
+
 // limitIter applies a LIMIT clause.
 type limitIter struct {
 	ri  rowIter
@@ -243,7 +265,7 @@ func (li *limitIter) Next() (row, error) {
 }
 
 type queryParam struct {
-	Value interface{}
+	Value interface{} // internal representation
 	Type  spansql.Type
 }
 
@@ -284,11 +306,17 @@ func (d *database) Query(q spansql.Query, params queryParams) (rowIter, error) {
 		ri = raw
 	}
 
-	// TODO: OFFSET
-
-	// Apply LIMIT.
+	// Apply LIMIT, OFFSET.
 	if q.Limit != nil {
-		lim, err := evalLimit(q.Limit, params)
+		if q.Offset != nil {
+			off, err := evalLiteralOrParam(q.Offset, params)
+			if err != nil {
+				return nil, err
+			}
+			ri = &offsetIter{ri: ri, skip: off}
+		}
+
+		lim, err := evalLiteralOrParam(q.Limit, params)
 		if err != nil {
 			return nil, err
 		}
@@ -319,16 +347,15 @@ func (d *database) evalSelect(sel spansql.Select, params queryParams) (ri rowIte
 		defer t.mu.Unlock()
 		ri = &tableIter{t: t}
 		ec.cols = t.cols
-	}
-	defer func() {
-		// If we're about to return a tableIter, convert it to a rawIter
+
+		// On the way out, convert the result to a rawIter
 		// so that the table may be safely unlocked.
-		if evalErr == nil {
-			if ti, ok := ri.(*tableIter); ok {
-				ri, evalErr = toRawIter(ti)
+		defer func() {
+			if evalErr == nil {
+				ri, evalErr = toRawIter(ri)
 			}
-		}
-	}()
+		}()
+	}
 
 	// Apply WHERE.
 	if sel.Where != nil {

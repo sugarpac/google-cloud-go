@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newGrafeasV1Beta1ClientHook clientHook
+
 // GrafeasV1Beta1CallOptions contains the retry settings for each method of GrafeasV1Beta1Client.
 type GrafeasV1Beta1CallOptions struct {
 	GetOccurrence                      []gax.CallOption
@@ -216,7 +218,17 @@ type GrafeasV1Beta1Client struct {
 // there would be one note for the vulnerability and an occurrence for each
 // image with the vulnerability referring to that note.
 func NewGrafeasV1Beta1Client(ctx context.Context, opts ...option.ClientOption) (*GrafeasV1Beta1Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultGrafeasV1Beta1ClientOptions(), opts...)...)
+	clientOpts := defaultGrafeasV1Beta1ClientOptions()
+
+	if newGrafeasV1Beta1ClientHook != nil {
+		hookOpts, err := newGrafeasV1Beta1ClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -295,7 +307,7 @@ func (c *GrafeasV1Beta1Client) ListOccurrences(ctx context.Context, req *grafeas
 		}
 
 		it.Response = resp
-		return resp.Occurrences, resp.NextPageToken, nil
+		return resp.GetOccurrences(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -306,8 +318,8 @@ func (c *GrafeasV1Beta1Client) ListOccurrences(ctx context.Context, req *grafeas
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -437,7 +449,7 @@ func (c *GrafeasV1Beta1Client) ListNotes(ctx context.Context, req *grafeaspb.Lis
 		}
 
 		it.Response = resp
-		return resp.Notes, resp.NextPageToken, nil
+		return resp.GetNotes(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -448,8 +460,8 @@ func (c *GrafeasV1Beta1Client) ListNotes(ctx context.Context, req *grafeaspb.Lis
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -544,7 +556,7 @@ func (c *GrafeasV1Beta1Client) ListNoteOccurrences(ctx context.Context, req *gra
 		}
 
 		it.Response = resp
-		return resp.Occurrences, resp.NextPageToken, nil
+		return resp.GetOccurrences(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -555,8 +567,8 @@ func (c *GrafeasV1Beta1Client) ListNoteOccurrences(ctx context.Context, req *gra
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

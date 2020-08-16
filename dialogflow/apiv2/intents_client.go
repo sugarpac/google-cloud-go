@@ -38,6 +38,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newIntentsClientHook clientHook
+
 // IntentsCallOptions contains the retry settings for each method of IntentsClient.
 type IntentsCallOptions struct {
 	ListIntents        []gax.CallOption
@@ -65,7 +67,6 @@ func defaultIntentsCallOptions() *IntentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -77,7 +78,6 @@ func defaultIntentsCallOptions() *IntentsCallOptions {
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -85,13 +85,32 @@ func defaultIntentsCallOptions() *IntentsCallOptions {
 				})
 			}),
 		},
-		CreateIntent: []gax.CallOption{},
-		UpdateIntent: []gax.CallOption{},
+		CreateIntent: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
+		UpdateIntent: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
 		DeleteIntent: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -99,12 +118,21 @@ func defaultIntentsCallOptions() *IntentsCallOptions {
 				})
 			}),
 		},
-		BatchUpdateIntents: []gax.CallOption{},
+		BatchUpdateIntents: []gax.CallOption{
+			gax.WithRetry(func() gax.Retryer {
+				return gax.OnCodes([]codes.Code{
+					codes.Unavailable,
+				}, gax.Backoff{
+					Initial:    100 * time.Millisecond,
+					Max:        60000 * time.Millisecond,
+					Multiplier: 1.30,
+				})
+			}),
+		},
 		BatchDeleteIntents: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
 					codes.Unavailable,
-					codes.DeadlineExceeded,
 				}, gax.Backoff{
 					Initial:    100 * time.Millisecond,
 					Max:        60000 * time.Millisecond,
@@ -139,40 +167,19 @@ type IntentsClient struct {
 
 // NewIntentsClient creates a new intents client.
 //
-// An intent represents a mapping between input from a user and an action to
-// be taken by your application. When you pass user input to the
-// [DetectIntent][google.cloud.dialogflow.v2.Sessions.DetectIntent] (or
-// [StreamingDetectIntent][google.cloud.dialogflow.v2.Sessions.StreamingDetectIntent]) method, the
-// Dialogflow API analyzes the input and searches
-// for a matching intent. If no match is found, the Dialogflow API returns a
-// fallback intent (is_fallback = true).
-//
-// You can provide additional information for the Dialogflow API to use to
-// match user input to an intent by adding the following to your intent.
-//
-//   Contexts - provide additional context for intent analysis. For
-//   example, if an intent is related to an object in your application that
-//   plays music, you can provide a context to determine when to match the
-//   intent if the user input is “turn it off”. You can include a context
-//   that matches the intent when there is previous user input of
-//   “play music”, and not when there is previous user input of
-//   “turn on the light”.
-//
-//   Events - allow for matching an intent by using an event name
-//   instead of user input. Your application can provide an event name and
-//   related parameters to the Dialogflow API to match an intent. For
-//   example, when your application starts, you can send a welcome event
-//   with a user name parameter to the Dialogflow API to match an intent with
-//   a personalized welcome message for the user.
-//
-//   Training phrases - provide examples of user input to train the
-//   Dialogflow API agent to better match intents.
-//
-// For more information about intents, see the
-// Dialogflow
-// documentation (at https://cloud.google.com/dialogflow/docs/intents-overview).
+// Service for managing Intents.
 func NewIntentsClient(ctx context.Context, opts ...option.ClientOption) (*IntentsClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultIntentsClientOptions(), opts...)...)
+	clientOpts := defaultIntentsClientOptions()
+
+	if newIntentsClientHook != nil {
+		hookOpts, err := newIntentsClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +251,7 @@ func (c *IntentsClient) ListIntents(ctx context.Context, req *dialogflowpb.ListI
 		}
 
 		it.Response = resp
-		return resp.Intents, resp.NextPageToken, nil
+		return resp.GetIntents(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -255,8 +262,8 @@ func (c *IntentsClient) ListIntents(ctx context.Context, req *dialogflowpb.ListI
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -326,7 +333,7 @@ func (c *IntentsClient) DeleteIntent(ctx context.Context, req *dialogflowpb.Dele
 
 // BatchUpdateIntents updates/Creates multiple intents in the specified agent.
 //
-// Operation <response: [BatchUpdateIntentsResponse][google.cloud.dialogflow.v2.BatchUpdateIntentsResponse]>
+// Operation <response: BatchUpdateIntentsResponse>
 func (c *IntentsClient) BatchUpdateIntents(ctx context.Context, req *dialogflowpb.BatchUpdateIntentsRequest, opts ...gax.CallOption) (*BatchUpdateIntentsOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -347,7 +354,7 @@ func (c *IntentsClient) BatchUpdateIntents(ctx context.Context, req *dialogflowp
 
 // BatchDeleteIntents deletes intents in the specified agent.
 //
-// Operation <response: [google.protobuf.Empty][google.protobuf.Empty]>
+// Operation <response: google.protobuf.Empty>
 func (c *IntentsClient) BatchDeleteIntents(ctx context.Context, req *dialogflowpb.BatchDeleteIntentsRequest, opts ...gax.CallOption) (*BatchDeleteIntentsOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)

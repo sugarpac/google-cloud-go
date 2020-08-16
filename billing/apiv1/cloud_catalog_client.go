@@ -32,6 +32,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newCloudCatalogClientHook clientHook
+
 // CloudCatalogCallOptions contains the retry settings for each method of CloudCatalogClient.
 type CloudCatalogCallOptions struct {
 	ListServices []gax.CallOption
@@ -78,7 +80,17 @@ type CloudCatalogClient struct {
 // Provides pricing information and metadata on Google Cloud Platform services
 // and SKUs.
 func NewCloudCatalogClient(ctx context.Context, opts ...option.ClientOption) (*CloudCatalogClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultCloudCatalogClientOptions(), opts...)...)
+	clientOpts := defaultCloudCatalogClientOptions()
+
+	if newCloudCatalogClientHook != nil {
+		hookOpts, err := newCloudCatalogClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -139,7 +151,7 @@ func (c *CloudCatalogClient) ListServices(ctx context.Context, req *billingpb.Li
 		}
 
 		it.Response = resp
-		return resp.Services, resp.NextPageToken, nil
+		return resp.GetServices(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -150,8 +162,8 @@ func (c *CloudCatalogClient) ListServices(ctx context.Context, req *billingpb.Li
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -180,7 +192,7 @@ func (c *CloudCatalogClient) ListSkus(ctx context.Context, req *billingpb.ListSk
 		}
 
 		it.Response = resp
-		return resp.Skus, resp.NextPageToken, nil
+		return resp.GetSkus(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -191,8 +203,8 @@ func (c *CloudCatalogClient) ListSkus(ctx context.Context, req *billingpb.ListSk
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

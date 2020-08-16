@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newClientHook clientHook
+
 // CallOptions contains the retry settings for each method of Client.
 type CallOptions struct {
 	InspectContent           []gax.CallOption
@@ -53,6 +55,7 @@ type CallOptions struct {
 	DeleteDeidentifyTemplate []gax.CallOption
 	CreateJobTrigger         []gax.CallOption
 	UpdateJobTrigger         []gax.CallOption
+	HybridInspectJobTrigger  []gax.CallOption
 	GetJobTrigger            []gax.CallOption
 	ListJobTriggers          []gax.CallOption
 	DeleteJobTrigger         []gax.CallOption
@@ -67,6 +70,8 @@ type CallOptions struct {
 	GetStoredInfoType        []gax.CallOption
 	ListStoredInfoTypes      []gax.CallOption
 	DeleteStoredInfoType     []gax.CallOption
+	HybridInspectDlpJob      []gax.CallOption
+	FinishDlpJob             []gax.CallOption
 }
 
 func defaultClientOptions() []option.ClientOption {
@@ -217,8 +222,9 @@ func defaultCallOptions() *CallOptions {
 				})
 			}),
 		},
-		CreateJobTrigger: []gax.CallOption{},
-		UpdateJobTrigger: []gax.CallOption{},
+		CreateJobTrigger:        []gax.CallOption{},
+		UpdateJobTrigger:        []gax.CallOption{},
+		HybridInspectJobTrigger: []gax.CallOption{},
 		GetJobTrigger: []gax.CallOption{
 			gax.WithRetry(func() gax.Retryer {
 				return gax.OnCodes([]codes.Code{
@@ -332,6 +338,8 @@ func defaultCallOptions() *CallOptions {
 				})
 			}),
 		},
+		HybridInspectDlpJob: []gax.CallOption{},
+		FinishDlpJob:        []gax.CallOption{},
 	}
 }
 
@@ -364,7 +372,17 @@ type Client struct {
 // To learn more about concepts and find how-to guides see
 // https://cloud.google.com/dlp/docs/ (at https://cloud.google.com/dlp/docs/).
 func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultClientOptions(), opts...)...)
+	clientOpts := defaultClientOptions()
+
+	if newClientHook != nil {
+		hookOpts, err := newClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -498,7 +516,8 @@ func (c *Client) ReidentifyContent(ctx context.Context, req *dlppb.ReidentifyCon
 // supports. See https://cloud.google.com/dlp/docs/infotypes-reference (at https://cloud.google.com/dlp/docs/infotypes-reference) to
 // learn more.
 func (c *Client) ListInfoTypes(ctx context.Context, req *dlppb.ListInfoTypesRequest, opts ...gax.CallOption) (*dlppb.ListInfoTypesResponse, error) {
-	ctx = insertMetadata(ctx, c.xGoogMetadata)
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
 	opts = append(c.CallOptions.ListInfoTypes[0:len(c.CallOptions.ListInfoTypes):len(c.CallOptions.ListInfoTypes)], opts...)
 	var resp *dlppb.ListInfoTypesResponse
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
@@ -593,7 +612,7 @@ func (c *Client) ListInspectTemplates(ctx context.Context, req *dlppb.ListInspec
 		}
 
 		it.Response = resp
-		return resp.InspectTemplates, resp.NextPageToken, nil
+		return resp.GetInspectTemplates(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -604,8 +623,8 @@ func (c *Client) ListInspectTemplates(ctx context.Context, req *dlppb.ListInspec
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -708,7 +727,7 @@ func (c *Client) ListDeidentifyTemplates(ctx context.Context, req *dlppb.ListDei
 		}
 
 		it.Response = resp
-		return resp.DeidentifyTemplates, resp.NextPageToken, nil
+		return resp.GetDeidentifyTemplates(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -719,8 +738,8 @@ func (c *Client) ListDeidentifyTemplates(ctx context.Context, req *dlppb.ListDei
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -776,6 +795,28 @@ func (c *Client) UpdateJobTrigger(ctx context.Context, req *dlppb.UpdateJobTrigg
 	return resp, nil
 }
 
+// HybridInspectJobTrigger inspect hybrid content and store findings to a trigger. The inspection
+// will be processed asynchronously. To review the findings monitor the
+// jobs within the trigger.
+// Early access feature is in a pre-release state and might change or have
+// limited support. For more information, see
+// https://cloud.google.com/products#product-launch-stages (at https://cloud.google.com/products#product-launch-stages).
+func (c *Client) HybridInspectJobTrigger(ctx context.Context, req *dlppb.HybridInspectJobTriggerRequest, opts ...gax.CallOption) (*dlppb.HybridInspectResponse, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.HybridInspectJobTrigger[0:len(c.CallOptions.HybridInspectJobTrigger):len(c.CallOptions.HybridInspectJobTrigger)], opts...)
+	var resp *dlppb.HybridInspectResponse
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.HybridInspectJobTrigger(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
 // GetJobTrigger gets a job trigger.
 // See https://cloud.google.com/dlp/docs/creating-job-triggers (at https://cloud.google.com/dlp/docs/creating-job-triggers) to learn more.
 func (c *Client) GetJobTrigger(ctx context.Context, req *dlppb.GetJobTriggerRequest, opts ...gax.CallOption) (*dlppb.JobTrigger, error) {
@@ -820,7 +861,7 @@ func (c *Client) ListJobTriggers(ctx context.Context, req *dlppb.ListJobTriggers
 		}
 
 		it.Response = resp
-		return resp.JobTriggers, resp.NextPageToken, nil
+		return resp.GetJobTriggers(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -831,8 +872,8 @@ func (c *Client) ListJobTriggers(ctx context.Context, req *dlppb.ListJobTriggers
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -918,7 +959,7 @@ func (c *Client) ListDlpJobs(ctx context.Context, req *dlppb.ListDlpJobsRequest,
 		}
 
 		it.Response = resp
-		return resp.Jobs, resp.NextPageToken, nil
+		return resp.GetJobs(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -929,8 +970,8 @@ func (c *Client) ListDlpJobs(ctx context.Context, req *dlppb.ListDlpJobsRequest,
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -1072,7 +1113,7 @@ func (c *Client) ListStoredInfoTypes(ctx context.Context, req *dlppb.ListStoredI
 		}
 
 		it.Response = resp
-		return resp.StoredInfoTypes, resp.NextPageToken, nil
+		return resp.GetStoredInfoTypes(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -1083,8 +1124,8 @@ func (c *Client) ListStoredInfoTypes(ctx context.Context, req *dlppb.ListStoredI
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -1098,6 +1139,45 @@ func (c *Client) DeleteStoredInfoType(ctx context.Context, req *dlppb.DeleteStor
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
 		var err error
 		_, err = c.client.DeleteStoredInfoType(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	return err
+}
+
+// HybridInspectDlpJob inspect hybrid content and store findings to a job.
+// To review the findings inspect the job. Inspection will occur
+// asynchronously.
+// Early access feature is in a pre-release state and might change or have
+// limited support. For more information, see
+// https://cloud.google.com/products#product-launch-stages (at https://cloud.google.com/products#product-launch-stages).
+func (c *Client) HybridInspectDlpJob(ctx context.Context, req *dlppb.HybridInspectDlpJobRequest, opts ...gax.CallOption) (*dlppb.HybridInspectResponse, error) {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.HybridInspectDlpJob[0:len(c.CallOptions.HybridInspectDlpJob):len(c.CallOptions.HybridInspectDlpJob)], opts...)
+	var resp *dlppb.HybridInspectResponse
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		resp, err = c.client.HybridInspectDlpJob(ctx, req, settings.GRPC...)
+		return err
+	}, opts...)
+	if err != nil {
+		return nil, err
+	}
+	return resp, nil
+}
+
+// FinishDlpJob finish a running hybrid DlpJob. Triggers the finalization steps and running
+// of any enabled actions that have not yet run.
+// Early access feature is in a pre-release state and might change or have
+// limited support. For more information, see
+// https://cloud.google.com/products#product-launch-stages (at https://cloud.google.com/products#product-launch-stages).
+func (c *Client) FinishDlpJob(ctx context.Context, req *dlppb.FinishDlpJobRequest, opts ...gax.CallOption) error {
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
+	opts = append(c.CallOptions.FinishDlpJob[0:len(c.CallOptions.FinishDlpJob):len(c.CallOptions.FinishDlpJob)], opts...)
+	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
+		var err error
+		_, err = c.client.FinishDlpJob(ctx, req, settings.GRPC...)
 		return err
 	}, opts...)
 	return err

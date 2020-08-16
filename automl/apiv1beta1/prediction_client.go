@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newPredictionClientHook clientHook
+
 // PredictionCallOptions contains the retry settings for each method of PredictionClient.
 type PredictionCallOptions struct {
 	Predict      []gax.CallOption
@@ -86,7 +88,17 @@ type PredictionClient struct {
 // On any input that is documented to expect a string parameter in
 // snake_case or kebab-case, either of those cases is accepted.
 func NewPredictionClient(ctx context.Context, opts ...option.ClientOption) (*PredictionClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultPredictionClientOptions(), opts...)...)
+	clientOpts := defaultPredictionClientOptions()
+
+	if newPredictionClientHook != nil {
+		hookOpts, err := newPredictionClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -155,7 +167,7 @@ func (c *PredictionClient) setGoogleClientInfo(keyval ...string) {
 //   Tables - Row, with column values matching the columns of the model,
 //   up to 5MB. Not available for FORECASTING
 //
-// [prediction_type][google.cloud.automl.v1beta1.TablesModelMetadata.prediction_type].
+// prediction_type.
 //
 //   Text Sentiment - TextSnippet, content up 500 characters, UTF-8
 //   encoded.
@@ -175,12 +187,12 @@ func (c *PredictionClient) Predict(ctx context.Context, req *automlpb.PredictReq
 	return resp, nil
 }
 
-// BatchPredict perform a batch prediction. Unlike the online [Predict][google.cloud.automl.v1beta1.PredictionService.Predict], batch
+// BatchPredict perform a batch prediction. Unlike the online Predict, batch
 // prediction result won’t be immediately available in the response. Instead,
 // a long running operation object is returned. User can poll the operation
-// result via [GetOperation][google.longrunning.Operations.GetOperation]
-// method. Once the operation is done, [BatchPredictResult][google.cloud.automl.v1beta1.BatchPredictResult] is returned in
-// the [response][google.longrunning.Operation.response] field.
+// result via GetOperation
+// method. Once the operation is done, BatchPredictResult is returned in
+// the response field.
 // Available for following ML problems:
 //
 //   Image Classification

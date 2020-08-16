@@ -25,6 +25,7 @@ import (
 	"math"
 	"os"
 	"reflect"
+	"regexp"
 	"strings"
 	"sync"
 	"testing"
@@ -39,6 +40,7 @@ import (
 	"google.golang.org/api/option"
 	adminpb "google.golang.org/genproto/googleapis/spanner/admin/database/v1"
 	instancepb "google.golang.org/genproto/googleapis/spanner/admin/instance/v1"
+	sppb "google.golang.org/genproto/googleapis/spanner/v1"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -51,6 +53,7 @@ var (
 
 	dbNameSpace       = uid.NewSpace("gotest", &uid.Options{Sep: '_', Short: true})
 	instanceNameSpace = uid.NewSpace("gotest", &uid.Options{Sep: '-', Short: true})
+	backupIDSpace     = uid.NewSpace("gotest", &uid.Options{Sep: '_', Short: true})
 	testInstanceID    = instanceNameSpace.New()
 
 	testTable        = "TestTable"
@@ -116,7 +119,50 @@ var (
 		    Ts   TIMESTAMP OPTIONS (allow_commit_timestamp = true),
 	    ) PRIMARY KEY (Key)`,
 	}
+	backuDBStatements = []string{
+		`CREATE TABLE Singers (
+						SingerId	INT64 NOT NULL,
+						FirstName	STRING(1024),
+						LastName	STRING(1024),
+						SingerInfo	BYTES(MAX)
+					) PRIMARY KEY (SingerId)`,
+		`CREATE INDEX SingerByName ON Singers(FirstName, LastName)`,
+		`CREATE TABLE Accounts (
+						AccountId	INT64 NOT NULL,
+						Nickname	STRING(100),
+						Balance		INT64 NOT NULL,
+					) PRIMARY KEY (AccountId)`,
+		`CREATE INDEX AccountByNickname ON Accounts(Nickname) STORING (Balance)`,
+		`CREATE TABLE Types (
+						RowID		INT64 NOT NULL,
+						String		STRING(MAX),
+						StringArray	ARRAY<STRING(MAX)>,
+						Bytes		BYTES(MAX),
+						BytesArray	ARRAY<BYTES(MAX)>,
+						Int64a		INT64,
+						Int64Array	ARRAY<INT64>,
+						Bool		BOOL,
+						BoolArray	ARRAY<BOOL>,
+						Float64		FLOAT64,
+						Float64Array	ARRAY<FLOAT64>,
+						Date		DATE,
+						DateArray	ARRAY<DATE>,
+						Timestamp	TIMESTAMP,
+						TimestampArray	ARRAY<TIMESTAMP>,
+					) PRIMARY KEY (RowID)`,
+	}
+
+	validInstancePattern = regexp.MustCompile("^projects/(?P<project>[^/]+)/instances/(?P<instance>[^/]+)$")
 )
+
+func parseInstanceName(inst string) (project, instance string, err error) {
+	matches := validInstancePattern.FindStringSubmatch(inst)
+	if len(matches) == 0 {
+		return "", "", fmt.Errorf("Failed to parse instance name from %q according to pattern %q",
+			inst, validInstancePattern.String())
+	}
+	return matches[1], matches[2], nil
+}
 
 const (
 	str1 = "alice"
@@ -147,28 +193,8 @@ func initIntegrationTests() (cleanup func()) {
 		return noop
 	}
 
-	ts := testutil.TokenSource(ctx, AdminScope, Scope)
-	if ts == nil {
-		log.Printf("Integration test skipped: cannot get service account credential from environment variable %v", "GCLOUD_TESTS_GOLANG_KEY")
-		return noop
-	}
+	opts := grpcHeaderChecker.CallOptions()
 	var err error
-
-	opts := append(grpcHeaderChecker.CallOptions(), option.WithTokenSource(ts), option.WithEndpoint(endpoint))
-
-	// Run integration tests against the given emulator. Currently, the database and
-	// instance admin clients are auto-generated, which do not support to configure
-	// SPANNER_EMULATOR_HOST.
-	emulatorAddr := os.Getenv("SPANNER_EMULATOR_HOST")
-	if emulatorAddr != "" {
-		opts = append(
-			grpcHeaderChecker.CallOptions(),
-			option.WithEndpoint(emulatorAddr),
-			option.WithGRPCDialOption(grpc.WithInsecure()),
-			option.WithoutAuthentication(),
-		)
-	}
-
 	// Create InstanceAdmin and DatabaseAdmin clients.
 	instanceAdmin, err = instance.NewInstanceAdminClient(ctx, opts...)
 	if err != nil {
@@ -190,6 +216,11 @@ func initIntegrationTests() (cleanup func()) {
 	if err != nil {
 		log.Fatalf("Cannot get any instance configurations.\nPlease make sure the Cloud Spanner API is enabled for the test project.\nGet error: %v", err)
 	}
+
+	// First clean up any old test instances before we start the actual testing
+	// as these might cause this test run to fail.
+	cleanupInstances()
+
 	// Create a test instance to use for this test run.
 	op, err := instanceAdmin.CreateInstance(ctx, &instancepb.CreateInstanceRequest{
 		Parent:     fmt.Sprintf("projects/%s", testProjectID),
@@ -215,12 +246,7 @@ func initIntegrationTests() (cleanup func()) {
 	return func() {
 		// Delete this test instance.
 		instanceName := fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID)
-		if err = instanceAdmin.DeleteInstance(ctx, &instancepb.DeleteInstanceRequest{
-			Name: instanceName,
-		}); err != nil {
-			log.Printf("failed to drop instance %s (error %v), might need a manual removal",
-				instanceName, err)
-		}
+		deleteInstanceAndBackups(ctx, instanceName)
 		// Delete other test instances that may be lingering around.
 		cleanupInstances()
 		databaseAdmin.Close()
@@ -392,7 +418,7 @@ func TestIntegration_SingleUse(t *testing.T) {
 			got, err := readAll(su.Query(
 				ctx,
 				Statement{
-					"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4)",
+					"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
 					map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
 				}))
 			if err != nil {
@@ -512,10 +538,10 @@ func TestIntegration_SingleUse(t *testing.T) {
 	}
 }
 
-// Test resource-based routing enabled.
-func TestIntegration_SingleUse_WithResourceBasedRouting(t *testing.T) {
-	os.Setenv("GOOGLE_CLOUD_SPANNER_ENABLE_RESOURCE_BASED_ROUTING", "true")
-	defer os.Setenv("GOOGLE_CLOUD_SPANNER_ENABLE_RESOURCE_BASED_ROUTING", "")
+// Test custom query options provided on query-level configuration.
+func TestIntegration_SingleUse_WithQueryOptions(t *testing.T) {
+	skipEmulatorTest(t)
+	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
@@ -542,17 +568,19 @@ func TestIntegration_SingleUse_WithResourceBasedRouting(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	qo := QueryOptions{Options: &sppb.ExecuteSqlRequest_QueryOptions{OptimizerVersion: "1"}}
+	got, err := readAll(client.Single().QueryWithOptions(ctx, Statement{
+		"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4)",
+		map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
+	}, qo))
 
-	row, err := client.Single().ReadRow(ctx, "Singers", Key{3}, []string{"FirstName"})
 	if err != nil {
-		t.Errorf("SingleUse.ReadRow returns error %v, want nil", err)
+		t.Errorf("ReadOnlyTransaction.QueryWithOptions returns error %v, want nil", err)
 	}
-	var got string
-	if err := row.Column(0, &got); err != nil {
-		t.Errorf("row.Column returns error %v, want nil", err)
-	}
-	if want := "Alpha"; got != want {
-		t.Errorf("got %q, want %q", got, want)
+
+	want := [][]interface{}{{int64(1), "Marc", "Foo"}, {int64(3), "Alpha", "Beta"}, {int64(4), "Last", "End"}}
+	if !testEqual(got, want) {
+		t.Errorf("got unexpected result from ReadOnlyTransaction.QueryWithOptions: %v, want %v", got, want)
 	}
 }
 
@@ -602,7 +630,8 @@ func TestIntegration_SingleUse_ReadingWithLimit(t *testing.T) {
 func TestIntegration_ReadOnlyTransaction(t *testing.T) {
 	t.Parallel()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	ctxTimeout := 5 * time.Minute
+	ctx, cancel := context.WithTimeout(context.Background(), ctxTimeout)
 	defer cancel()
 	// Set up testing environment.
 	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
@@ -664,9 +693,8 @@ func TestIntegration_ReadOnlyTransaction(t *testing.T) {
 		{
 			// exact_staleness
 			nil,
-			// Specify a staleness which should be already before this test
-			// because context timeout is set to be 10s.
-			ExactStaleness(11 * time.Second),
+			// Specify a staleness which should be already before this test.
+			ExactStaleness(ctxTimeout + 1),
 			func(ts time.Time) error {
 				if ts.After(writes[0].ts) {
 					return fmt.Errorf("read got timestamp %v, want it to be no earlier than %v", ts, writes[0].ts)
@@ -680,7 +708,7 @@ func TestIntegration_ReadOnlyTransaction(t *testing.T) {
 		got, err := readAll(ro.Query(
 			ctx,
 			Statement{
-				"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4)",
+				"SELECT SingerId, FirstName, LastName FROM Singers WHERE SingerId IN (@id1, @id3, @id4) ORDER BY SingerId",
 				map[string]interface{}{"id1": int64(1), "id3": int64(3), "id4": int64(4)},
 			}))
 		if err != nil {
@@ -935,6 +963,98 @@ func TestIntegration_ReadWriteTransaction(t *testing.T) {
 	}
 }
 
+func TestIntegration_ReadWriteTransaction_StatementBased(t *testing.T) {
+	t.Parallel()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	client, _, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, singerDBStatements)
+	defer cleanup()
+
+	// Set up two accounts
+	accounts := []*Mutation{
+		Insert("Accounts", []string{"AccountId", "Nickname", "Balance"}, []interface{}{int64(1), "Foo", int64(50)}),
+		Insert("Accounts", []string{"AccountId", "Nickname", "Balance"}, []interface{}{int64(2), "Bar", int64(1)}),
+	}
+	if _, err := client.Apply(ctx, accounts, ApplyAtLeastOnce()); err != nil {
+		t.Fatal(err)
+	}
+
+	getBalance := func(txn *ReadWriteStmtBasedTransaction, key Key) (int64, error) {
+		row, err := txn.ReadRow(ctx, "Accounts", key, []string{"Balance"})
+		if err != nil {
+			return 0, err
+		}
+		var balance int64
+		if err := row.Column(0, &balance); err != nil {
+			return 0, err
+		}
+		return balance, nil
+	}
+
+	statements := func(txn *ReadWriteStmtBasedTransaction) error {
+		outBalance, err := getBalance(txn, Key{1})
+		if err != nil {
+			return err
+		}
+		const transferAmt = 20
+		if outBalance >= transferAmt {
+			inBalance, err := getBalance(txn, Key{2})
+			if err != nil {
+				return err
+			}
+			inBalance += transferAmt
+			outBalance -= transferAmt
+			cols := []string{"AccountId", "Balance"}
+			txn.BufferWrite([]*Mutation{
+				Update("Accounts", cols, []interface{}{1, outBalance}),
+				Update("Accounts", cols, []interface{}{2, inBalance}),
+			})
+		}
+		return nil
+	}
+
+	for {
+		tx, err := NewReadWriteStmtBasedTransaction(ctx, client)
+		if err != nil {
+			t.Fatalf("failed to begin a transaction: %v", err)
+		}
+		err = statements(tx)
+		if err != nil && status.Code(err) != codes.Aborted {
+			tx.Rollback(ctx)
+			t.Fatalf("failed to execute statements: %v", err)
+		} else if err == nil {
+			_, err = tx.Commit(ctx)
+			if err == nil {
+				break
+			} else if status.Code(err) != codes.Aborted {
+				t.Fatalf("failed to commit a transaction: %v", err)
+			}
+		}
+		// Set a default sleep time if the server delay is absent.
+		delay := 10 * time.Millisecond
+		if serverDelay, hasServerDelay := ExtractRetryDelay(err); hasServerDelay {
+			delay = serverDelay
+		}
+		time.Sleep(delay)
+	}
+
+	// Query the updated values.
+	stmt := Statement{SQL: `SELECT AccountId, Nickname, Balance FROM Accounts ORDER BY AccountId`}
+	iter := client.Single().Query(ctx, stmt)
+	got, err := readAllAccountsTable(iter)
+	if err != nil {
+		t.Fatalf("failed to read data: %v", err)
+	}
+	want := [][]interface{}{
+		{int64(1), "Foo", int64(30)},
+		{int64(2), "Bar", int64(21)},
+	}
+	if !testEqual(got, want) {
+		t.Errorf("\ngot %v\nwant%v", got, want)
+	}
+}
+
 func TestIntegration_Reads(t *testing.T) {
 	t.Parallel()
 
@@ -1096,6 +1216,49 @@ func TestIntegration_NestedTransaction(t *testing.T) {
 	}
 }
 
+func TestIntegration_CreateDBRetry(t *testing.T) {
+	t.Parallel()
+
+	if databaseAdmin == nil {
+		t.Skip("Integration tests skipped")
+	}
+	skipEmulatorTest(t)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
+	defer cancel()
+	dbName := dbNameSpace.New()
+
+	// Simulate an Unavailable error on the CreateDatabase RPC.
+	hasReturnedUnavailable := false
+	interceptor := func(ctx context.Context, method string, req, reply interface{}, cc *grpc.ClientConn, invoker grpc.UnaryInvoker, opts ...grpc.CallOption) error {
+		err := invoker(ctx, method, req, reply, cc, opts...)
+		if !hasReturnedUnavailable && err == nil {
+			hasReturnedUnavailable = true
+			return status.Error(codes.Unavailable, "Injected unavailable error")
+		}
+		return err
+	}
+
+	dbAdmin, err := database.NewDatabaseAdminClient(ctx, option.WithGRPCDialOption(grpc.WithUnaryInterceptor(interceptor)))
+	if err != nil {
+		log.Fatalf("cannot create dbAdmin client: %v", err)
+	}
+	op, err := dbAdmin.CreateDatabaseWithRetry(ctx, &adminpb.CreateDatabaseRequest{
+		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
+		CreateStatement: "CREATE DATABASE " + dbName,
+	})
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	_, err = op.Wait(ctx)
+	if err != nil {
+		t.Fatalf("failed to create database: %v", err)
+	}
+	if !hasReturnedUnavailable {
+		t.Fatalf("interceptor did not return Unavailable")
+	}
+}
+
 // Test client recovery on database recreation.
 func TestIntegration_DbRemovalRecovery(t *testing.T) {
 	t.Parallel()
@@ -1121,7 +1284,7 @@ func TestIntegration_DbRemovalRecovery(t *testing.T) {
 
 	// Recreate database and table.
 	dbName := dbPath[strings.LastIndex(dbPath, "/")+1:]
-	op, err := databaseAdmin.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+	op, err := databaseAdmin.CreateDatabaseWithRetry(ctx, &adminpb.CreateDatabaseRequest{
 		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
 		CreateStatement: "CREATE DATABASE " + dbName,
 		ExtraStatements: []string{
@@ -1665,12 +1828,12 @@ func TestIntegration_TransactionRunner(t *testing.T) {
 		var b int64
 		r, e := tx.ReadRow(ctx, "Accounts", Key{int64(key)}, []string{"Balance"})
 		if e != nil {
-			if expectAbort && !isAbortErr(e) {
+			if expectAbort && !isAbortedErr(e) {
 				t.Errorf("ReadRow got %v, want Abort error.", e)
 			}
 			// Verify that we received and are able to extract retry info from
 			// the aborted error.
-			if _, hasRetryInfo := extractRetryDelay(e); !hasRetryInfo {
+			if _, hasRetryInfo := ExtractRetryDelay(e); !hasRetryInfo {
 				t.Errorf("Got Abort error without RetryInfo\nGot: %v", e)
 			}
 			return b, e
@@ -1756,7 +1919,6 @@ func TestIntegration_TransactionRunner(t *testing.T) {
 // serialize and deserialize both transaction and partition to be used in
 // execution on another client, and compare results.
 func TestIntegration_BatchQuery(t *testing.T) {
-	skipEmulatorTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -1843,7 +2005,6 @@ func TestIntegration_BatchQuery(t *testing.T) {
 
 // Test PartitionRead of BatchReadOnlyTransaction, similar to TestBatchQuery
 func TestIntegration_BatchRead(t *testing.T) {
-	skipEmulatorTest(t)
 	t.Parallel()
 
 	// Set up testing environment.
@@ -1929,7 +2090,6 @@ func TestIntegration_BatchRead(t *testing.T) {
 
 // Test normal txReadEnv method on BatchReadOnlyTransaction.
 func TestIntegration_BROTNormal(t *testing.T) {
-	skipEmulatorTest(t)
 	t.Parallel()
 
 	// Set up testing environment and create txn.
@@ -2111,7 +2271,7 @@ func TestIntegration_DML(t *testing.T) {
 			SQL: `Insert INTO Singers (SingerId, FirstName, LastName) VALUES (2, "Eduard", "Khil")`,
 		})
 		if err != nil {
-			t.Fatal(err)
+			return err
 		}
 		if count != 1 {
 			t.Errorf("row count: got %d, want 1", count)
@@ -2373,7 +2533,6 @@ func TestIntegration_StructParametersBind(t *testing.T) {
 }
 
 func TestIntegration_PDML(t *testing.T) {
-	skipEmulatorTest(t)
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2427,7 +2586,7 @@ func TestIntegration_PDML(t *testing.T) {
 	}
 }
 
-func TestBatchDML(t *testing.T) {
+func TestIntegration_BatchDML(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2480,7 +2639,7 @@ func TestBatchDML(t *testing.T) {
 	}
 }
 
-func TestBatchDML_NoStatements(t *testing.T) {
+func TestIntegration_BatchDML_NoStatements(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2504,7 +2663,7 @@ func TestBatchDML_NoStatements(t *testing.T) {
 	}
 }
 
-func TestBatchDML_TwoStatements(t *testing.T) {
+func TestIntegration_BatchDML_TwoStatements(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2553,9 +2712,7 @@ func TestBatchDML_TwoStatements(t *testing.T) {
 	}
 }
 
-// TODO(deklerk): this currently does not work because the transaction appears to
-// get rolled back after a single statement fails. b/120158761
-func TestBatchDML_Error(t *testing.T) {
+func TestIntegration_BatchDML_Error(t *testing.T) {
 	t.Parallel()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
@@ -2587,11 +2744,20 @@ func TestBatchDML_Error(t *testing.T) {
 		if err == nil {
 			t.Fatal("expected err, got nil")
 		}
+		// The statement may also have been aborted by Spanner, and in that
+		// case we should just let the client library retry the transaction.
+		if status.Code(err) == codes.Aborted {
+			return err
+		}
 		if want := []int64{1}; !testEqual(counts, want) {
 			t.Fatalf("got %d, want %d", counts, want)
 		}
 
 		got, err := readAll(tx.Read(ctx, "Singers", AllKeys(), columns))
+		// Aborted error is ok, just retry the transaction.
+		if status.Code(err) == codes.Aborted {
+			return err
+		}
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -2611,6 +2777,54 @@ func TestBatchDML_Error(t *testing.T) {
 	}
 }
 
+func TestIntegration_StartBackupOperation(t *testing.T) {
+	skipEmulatorTest(t)
+	t.Parallel()
+
+	// Backups can be slow, so use a 30 minute timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Minute)
+	defer cancel()
+	_, testDatabaseName, cleanup := prepareIntegrationTest(ctx, t, DefaultSessionPoolConfig, backuDBStatements)
+	defer cleanup()
+
+	backupID := backupIDSpace.New()
+	backupName := fmt.Sprintf("projects/%s/instances/%s/backups/%s", testProjectID, testInstanceID, backupID)
+	// Minimum expiry time is 6 hours
+	expires := time.Now().Add(time.Hour * 7)
+	respLRO, err := databaseAdmin.StartBackupOperation(ctx, backupID, testDatabaseName, expires)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = respLRO.Wait(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	respMetadata, err := respLRO.Metadata()
+	if err != nil {
+		t.Fatalf("backup response metadata, got error %v, want nil", err)
+	}
+	if respMetadata.Database != testDatabaseName {
+		t.Fatalf("backup database name, got %s, want %s", respMetadata.Database, testDatabaseName)
+	}
+	if respMetadata.Progress.ProgressPercent != 100 {
+		t.Fatalf("backup progress percent, got %d, want 100", respMetadata.Progress.ProgressPercent)
+	}
+	respCheck, err := databaseAdmin.GetBackup(ctx, &adminpb.GetBackupRequest{Name: backupName})
+	if err != nil {
+		t.Fatalf("backup metadata, got error %v, want nil", err)
+	}
+	if respCheck.CreateTime == nil {
+		t.Fatal("backup create time, got nil, want non-nil")
+	}
+	if respCheck.State != adminpb.Backup_READY {
+		t.Fatalf("backup state, got %v, want %v", respCheck.State, adminpb.Backup_READY)
+	}
+	if respCheck.SizeBytes == 0 {
+		t.Fatalf("backup size, got %d, want non-zero", respCheck.SizeBytes)
+	}
+}
+
 // Prepare initializes Cloud Spanner testing DB and clients.
 func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolConfig, statements []string) (*Client, string, func()) {
 	if databaseAdmin == nil {
@@ -2621,7 +2835,7 @@ func prepareIntegrationTest(ctx context.Context, t *testing.T, spc SessionPoolCo
 
 	dbPath := fmt.Sprintf("projects/%v/instances/%v/databases/%v", testProjectID, testInstanceID, dbName)
 	// Create database and tables.
-	op, err := databaseAdmin.CreateDatabase(ctx, &adminpb.CreateDatabaseRequest{
+	op, err := databaseAdmin.CreateDatabaseWithRetry(ctx, &adminpb.CreateDatabaseRequest{
 		Parent:          fmt.Sprintf("projects/%v/instances/%v", testProjectID, testInstanceID),
 		CreateStatement: "CREATE DATABASE " + dbName,
 		ExtraStatements: statements,
@@ -2663,14 +2877,40 @@ func cleanupInstances() {
 		if err != nil {
 			panic(err)
 		}
-		if instanceNameSpace.Older(inst.Name, expireAge) {
-			log.Printf("Deleting instance %s", inst.Name)
 
-			if err := instanceAdmin.DeleteInstance(ctx, &instancepb.DeleteInstanceRequest{Name: inst.Name}); err != nil {
-				log.Printf("failed to delete instance %s (error %v), might need a manual removal",
-					inst.Name, err)
-			}
+		_, instID, err := parseInstanceName(inst.Name)
+		if err != nil {
+			log.Printf("Error: %v\n", err)
+			continue
 		}
+		if instanceNameSpace.Older(instID, expireAge) {
+			log.Printf("Deleting instance %s", inst.Name)
+			deleteInstanceAndBackups(ctx, inst.Name)
+		}
+	}
+}
+
+func deleteInstanceAndBackups(ctx context.Context, instanceName string) {
+	// First delete any lingering backups that might have been left on
+	// the instance.
+	backups := databaseAdmin.ListBackups(ctx, &adminpb.ListBackupsRequest{Parent: instanceName})
+	for {
+		backup, err := backups.Next()
+		if err == iterator.Done {
+			break
+		}
+		if err != nil {
+			log.Printf("failed to retrieve backups from instance %s because of error %v", instanceName, err)
+			break
+		}
+		if err := databaseAdmin.DeleteBackup(ctx, &adminpb.DeleteBackupRequest{Name: backup.Name}); err != nil {
+			log.Printf("failed to delete backup %s (error %v)", backup.Name, err)
+		}
+	}
+
+	if err := instanceAdmin.DeleteInstance(ctx, &instancepb.DeleteInstanceRequest{Name: instanceName}); err != nil {
+		log.Printf("failed to delete instance %s (error %v), might need a manual removal",
+			instanceName, err)
 	}
 }
 
@@ -2777,17 +3017,7 @@ func isNaN(x interface{}) bool {
 
 // createClient creates Cloud Spanner data client.
 func createClient(ctx context.Context, dbPath string, spc SessionPoolConfig) (client *Client, err error) {
-	if os.Getenv("SPANNER_EMULATOR_HOST") == "" {
-		client, err = NewClientWithConfig(ctx, dbPath, ClientConfig{
-			SessionPoolConfig: spc,
-		}, option.WithTokenSource(testutil.TokenSource(ctx, Scope, AdminScope)), option.WithEndpoint(endpoint))
-	} else {
-		// When the emulator is enabled, option.WithoutAuthentication()
-		// will be added automatically which is incompatible with
-		// option.WithTokenSource(testutil.TokenSource(ctx, Scope)).
-		client, err = NewClientWithConfig(ctx, dbPath, ClientConfig{SessionPoolConfig: spc})
-	}
-
+	client, err = NewClientWithConfig(ctx, dbPath, ClientConfig{SessionPoolConfig: spc})
 	if err != nil {
 		return nil, fmt.Errorf("cannot create data client on DB %v: %v", dbPath, err)
 	}
@@ -2863,6 +3093,27 @@ func readAllTestTable(iter *RowIterator) ([]testTableRow, error) {
 			return nil, err
 		}
 		vals = append(vals, ttr)
+	}
+}
+
+func readAllAccountsTable(iter *RowIterator) ([][]interface{}, error) {
+	defer iter.Stop()
+	var vals [][]interface{}
+	for {
+		row, err := iter.Next()
+		if err == iterator.Done {
+			return vals, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		var id, balance int64
+		var nickname string
+		err = row.Columns(&id, &nickname, &balance)
+		if err != nil {
+			return nil, err
+		}
+		vals = append(vals, []interface{}{id, nickname, balance})
 	}
 }
 

@@ -35,6 +35,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newCloudBillingClientHook clientHook
+
 // CloudBillingCallOptions contains the retry settings for each method of CloudBillingClient.
 type CloudBillingCallOptions struct {
 	GetBillingAccount        []gax.CallOption
@@ -194,7 +196,17 @@ type CloudBillingClient struct {
 //
 // Retrieves GCP Console billing accounts and associates them with projects.
 func NewCloudBillingClient(ctx context.Context, opts ...option.ClientOption) (*CloudBillingClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultCloudBillingClientOptions(), opts...)...)
+	clientOpts := defaultCloudBillingClientOptions()
+
+	if newCloudBillingClientHook != nil {
+		hookOpts, err := newCloudBillingClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -276,7 +288,7 @@ func (c *CloudBillingClient) ListBillingAccounts(ctx context.Context, req *billi
 		}
 
 		it.Response = resp
-		return resp.BillingAccounts, resp.NextPageToken, nil
+		return resp.GetBillingAccounts(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -287,8 +299,8 @@ func (c *CloudBillingClient) ListBillingAccounts(ctx context.Context, req *billi
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -367,7 +379,7 @@ func (c *CloudBillingClient) ListProjectBillingInfo(ctx context.Context, req *bi
 		}
 
 		it.Response = resp
-		return resp.ProjectBillingInfo, resp.NextPageToken, nil
+		return resp.GetProjectBillingInfo(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -378,8 +390,8 @@ func (c *CloudBillingClient) ListProjectBillingInfo(ctx context.Context, req *bi
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

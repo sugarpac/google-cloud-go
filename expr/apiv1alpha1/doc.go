@@ -31,6 +31,8 @@
 //
 // For information about setting deadlines, reusing contexts, and more
 // please visit godoc.org/cloud.google.com/go.
+//
+// Deprecated. This package will be removed in a later release.
 package expr // import "cloud.google.com/go/expr/apiv1alpha1"
 
 import (
@@ -39,10 +41,16 @@ import (
 	"strings"
 	"unicode"
 
+	"google.golang.org/api/option"
 	"google.golang.org/grpc/metadata"
 )
 
-const versionClient = "20200305"
+// For more information on implementing a client constructor hook, see
+// https://github.com/googleapis/google-cloud-go/wiki/Customizing-constructors.
+type clientHookParams struct{}
+type clientHook func(context.Context, clientHookParams) ([]option.ClientOption, error)
+
+const versionClient = "20200420"
 
 func insertMetadata(ctx context.Context, mds ...metadata.MD) context.Context {
 	out, _ := metadata.FromOutgoingContext(ctx)

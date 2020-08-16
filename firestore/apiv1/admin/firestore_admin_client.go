@@ -37,6 +37,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newFirestoreAdminClientHook clientHook
+
 // FirestoreAdminCallOptions contains the retry settings for each method of FirestoreAdminClient.
 type FirestoreAdminCallOptions struct {
 	CreateIndex     []gax.CallOption
@@ -161,7 +163,17 @@ type FirestoreAdminClient struct {
 // Operations are created by service FirestoreAdmin, but are accessed via
 // service google.longrunning.Operations.
 func NewFirestoreAdminClient(ctx context.Context, opts ...option.ClientOption) (*FirestoreAdminClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultFirestoreAdminClientOptions(), opts...)...)
+	clientOpts := defaultFirestoreAdminClientOptions()
+
+	if newFirestoreAdminClientHook != nil {
+		hookOpts, err := newFirestoreAdminClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -171,7 +183,7 @@ func NewFirestoreAdminClient(ctx context.Context, opts ...option.ClientOption) (
 
 		firestoreAdminClient: adminpb.NewFirestoreAdminClient(connPool),
 	}
-	c.SetGoogleClientInfo()
+	c.setGoogleClientInfo()
 
 	c.LROClient, err = lroauto.NewOperationsClient(ctx, gtransport.WithConnPool(connPool))
 	if err != nil {
@@ -199,18 +211,18 @@ func (c *FirestoreAdminClient) Close() error {
 	return c.connPool.Close()
 }
 
-// SetGoogleClientInfo sets the name and version of the application in
+// setGoogleClientInfo sets the name and version of the application in
 // the `x-goog-api-client` header passed on each request. Intended for
 // use by Google-written clients.
-func (c *FirestoreAdminClient) SetGoogleClientInfo(keyval ...string) {
+func (c *FirestoreAdminClient) setGoogleClientInfo(keyval ...string) {
 	kv := append([]string{"gl-go", versionGo()}, keyval...)
 	kv = append(kv, "gapic", versionClient, "gax", gax.Version, "grpc", grpc.Version)
 	c.xGoogMetadata = metadata.Pairs("x-goog-api-client", gax.XGoogHeader(kv...))
 }
 
-// CreateIndex creates a composite index. This returns a [google.longrunning.Operation][google.longrunning.Operation]
+// CreateIndex creates a composite index. This returns a google.longrunning.Operation
 // which may be used to track the status of the creation. The metadata for
-// the operation will be the type [IndexOperationMetadata][google.firestore.admin.v1.IndexOperationMetadata].
+// the operation will be the type IndexOperationMetadata.
 func (c *FirestoreAdminClient) CreateIndex(ctx context.Context, req *adminpb.CreateIndexRequest, opts ...gax.CallOption) (*CreateIndexOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -254,7 +266,7 @@ func (c *FirestoreAdminClient) ListIndexes(ctx context.Context, req *adminpb.Lis
 		}
 
 		it.Response = resp
-		return resp.Indexes, resp.NextPageToken, nil
+		return resp.GetIndexes(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -265,8 +277,8 @@ func (c *FirestoreAdminClient) ListIndexes(ctx context.Context, req *adminpb.Lis
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -319,13 +331,13 @@ func (c *FirestoreAdminClient) GetField(ctx context.Context, req *adminpb.GetFie
 
 // UpdateField updates a field configuration. Currently, field updates apply only to
 // single field index configuration. However, calls to
-// [FirestoreAdmin.UpdateField][google.firestore.admin.v1.FirestoreAdmin.UpdateField] should provide a field mask to avoid
+// FirestoreAdmin.UpdateField should provide a field mask to avoid
 // changing any configuration that the caller isn’t aware of. The field mask
 // should be specified as: { paths: "index_config" }.
 //
-// This call returns a [google.longrunning.Operation][google.longrunning.Operation] which may be used to
+// This call returns a google.longrunning.Operation which may be used to
 // track the status of the field update. The metadata for
-// the operation will be the type [FieldOperationMetadata][google.firestore.admin.v1.FieldOperationMetadata].
+// the operation will be the type FieldOperationMetadata.
 //
 // To configure the default field settings for the database, use
 // the special Field with resource name:
@@ -350,9 +362,9 @@ func (c *FirestoreAdminClient) UpdateField(ctx context.Context, req *adminpb.Upd
 
 // ListFields lists the field configuration and metadata for this database.
 //
-// Currently, [FirestoreAdmin.ListFields][google.firestore.admin.v1.FirestoreAdmin.ListFields] only supports listing fields
+// Currently, FirestoreAdmin.ListFields only supports listing fields
 // that have been explicitly overridden. To issue this query, call
-// [FirestoreAdmin.ListFields][google.firestore.admin.v1.FirestoreAdmin.ListFields] with the filter set to
+// FirestoreAdmin.ListFields with the filter set to
 // indexConfig.usesAncestorConfig:false.
 func (c *FirestoreAdminClient) ListFields(ctx context.Context, req *adminpb.ListFieldsRequest, opts ...gax.CallOption) *FieldIterator {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
@@ -378,7 +390,7 @@ func (c *FirestoreAdminClient) ListFields(ctx context.Context, req *adminpb.List
 		}
 
 		it.Response = resp
-		return resp.Fields, resp.NextPageToken, nil
+		return resp.GetFields(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -389,8 +401,8 @@ func (c *FirestoreAdminClient) ListFields(ctx context.Context, req *adminpb.List
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

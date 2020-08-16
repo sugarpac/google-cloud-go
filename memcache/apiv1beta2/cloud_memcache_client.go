@@ -36,6 +36,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newCloudMemcacheClientHook clientHook
+
 // CloudMemcacheCallOptions contains the retry settings for each method of CloudMemcacheClient.
 type CloudMemcacheCallOptions struct {
 	ListInstances    []gax.CallOption
@@ -113,7 +115,17 @@ type CloudMemcacheClient struct {
 //
 //   projects/my-memcached-project/locations/us-central1/instances/my-memcached
 func NewCloudMemcacheClient(ctx context.Context, opts ...option.ClientOption) (*CloudMemcacheClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultCloudMemcacheClientOptions(), opts...)...)
+	clientOpts := defaultCloudMemcacheClientOptions()
+
+	if newCloudMemcacheClientHook != nil {
+		hookOpts, err := newCloudMemcacheClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -185,7 +197,7 @@ func (c *CloudMemcacheClient) ListInstances(ctx context.Context, req *memcachepb
 		}
 
 		it.Response = resp
-		return resp.Resources, resp.NextPageToken, nil
+		return resp.GetResources(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -196,8 +208,8 @@ func (c *CloudMemcacheClient) ListInstances(ctx context.Context, req *memcachepb
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

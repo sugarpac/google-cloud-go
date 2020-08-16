@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newCompanyClientHook clientHook
+
 // CompanyCallOptions contains the retry settings for each method of CompanyClient.
 type CompanyCallOptions struct {
 	CreateCompany []gax.CallOption
@@ -117,7 +119,17 @@ type CompanyClient struct {
 //
 // A service that handles company management, including CRUD and enumeration.
 func NewCompanyClient(ctx context.Context, opts ...option.ClientOption) (*CompanyClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultCompanyClientOptions(), opts...)...)
+	clientOpts := defaultCompanyClientOptions()
+
+	if newCompanyClientHook != nil {
+		hookOpts, err := newCompanyClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +256,7 @@ func (c *CompanyClient) ListCompanies(ctx context.Context, req *talentpb.ListCom
 		}
 
 		it.Response = resp
-		return resp.Companies, resp.NextPageToken, nil
+		return resp.GetCompanies(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -255,8 +267,8 @@ func (c *CompanyClient) ListCompanies(ctx context.Context, req *talentpb.ListCom
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

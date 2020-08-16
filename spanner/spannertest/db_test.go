@@ -17,14 +17,17 @@ limitations under the License.
 package spannertest
 
 import (
+	"fmt"
 	"io"
 	"reflect"
+	"sync"
 	"testing"
 
 	"google.golang.org/grpc/codes"
 
 	structpb "github.com/golang/protobuf/ptypes/struct"
 
+	"cloud.google.com/go/civil"
 	"cloud.google.com/go/spanner/spansql"
 )
 
@@ -450,7 +453,7 @@ func TestTableData(t *testing.T) {
 		},
 		{
 			`SELECT Name FROM Staff WHERE FirstSeen >= @min`,
-			queryParams{"min": queryParam{Value: "1996-01-01", Type: spansql.Type{Base: spansql.Date}}},
+			queryParams{"min": dateParam("1996-01-01")},
 			[][]interface{}{
 				{"George"},
 			},
@@ -464,7 +467,8 @@ func TestTableData(t *testing.T) {
 		},
 		{
 			// The keyword "To" needs quoting in queries.
-			"SELECT COUNT(*) FROM Staff WHERE `To` IS NOT NULL",
+			// Check coercion of comparison operator literal args too.
+			"SELECT COUNT(*) FROM Staff WHERE `To` > '2000-01-01T00:00:00Z'",
 			nil,
 			[][]interface{}{
 				{int64(1)},
@@ -480,6 +484,17 @@ func TestTableData(t *testing.T) {
 				{nil, false},
 				{nil, true},
 				{true, false},
+			},
+		},
+		{
+			`SELECT Name FROM Staff WHERE ID IN UNNEST(@ids)`,
+			queryParams{"ids": queryParam{
+				Value: []interface{}{int64(3), int64(1)},
+				Type:  spansql.Type{Base: spansql.Int64, Array: true},
+			}},
+			[][]interface{}{
+				{"Jack"},
+				{"Sam"},
 			},
 		},
 		// From https://cloud.google.com/spanner/docs/query-syntax#group-by-clause_1:
@@ -505,11 +520,40 @@ func TestTableData(t *testing.T) {
 			},
 		},
 		{
+			`SELECT MAX(Name) FROM Staff WHERE Name < @lim`,
+			queryParams{"lim": stringParam("Teal'c")},
+			[][]interface{}{
+				{"Sam"},
+			},
+		},
+		{
+			`SELECT MIN(Name) FROM Staff`,
+			nil,
+			[][]interface{}{
+				{"Daniel"},
+			},
+		},
+		{
 			`SELECT ARRAY_AGG(Cool) FROM Staff ORDER BY Name`,
 			nil,
 			[][]interface{}{
 				// Daniel, George (NULL), Jack (NULL), Sam, Teal'c
 				{[]interface{}{false, nil, nil, false, true}},
+			},
+		},
+		// Regression test for evaluating `IN` incorrectly using ==.
+		// https://github.com/googleapis/google-cloud-go/issues/2458
+		{
+			`SELECT COUNT(*) FROM Staff WHERE RawBytes IN UNNEST(@arg)`,
+			queryParams{"arg": queryParam{
+				Type: spansql.Type{Array: true, Base: spansql.Bytes},
+				Value: []interface{}{
+					[]byte{0x02},
+					[]byte{0x01, 0x00, 0x01}, // only one present
+				},
+			}},
+			[][]interface{}{
+				{int64(1)},
 			},
 		},
 	}
@@ -622,7 +666,8 @@ func TestTableSchemaConvertNull(t *testing.T) {
 	st = db.ApplyDDL(&spansql.AlterTable{
 		Name: "Songwriters",
 		Alteration: spansql.AlterColumn{
-			Def: spansql.ColumnDef{Name: "Nickname", Type: spansql.Type{Base: spansql.Bytes}},
+			Name:       "Nickname",
+			Alteration: spansql.SetColumnType{Type: spansql.Type{Base: spansql.Bytes}},
 		},
 	})
 	if err := st.Err(); err != nil {
@@ -631,7 +676,8 @@ func TestTableSchemaConvertNull(t *testing.T) {
 	st = db.ApplyDDL(&spansql.AlterTable{
 		Name: "Songwriters",
 		Alteration: spansql.AlterColumn{
-			Def: spansql.ColumnDef{Name: "Nickname", Type: spansql.Type{Base: spansql.String}},
+			Name:       "Nickname",
+			Alteration: spansql.SetColumnType{Type: spansql.Type{Base: spansql.String}},
 		},
 	})
 	if err := st.Err(); err != nil {
@@ -736,6 +782,79 @@ testLoop:
 	}
 }
 
+func TestConcurrentReadInsert(t *testing.T) {
+	// Check that data is safely copied during a query.
+	tbl := &spansql.CreateTable{
+		Name: "Tablino",
+		Columns: []spansql.ColumnDef{
+			{Name: "A", Type: spansql.Type{Base: spansql.Int64}},
+		},
+		PrimaryKey: []spansql.KeyPart{{Column: "A"}},
+	}
+
+	var db database
+	if st := db.ApplyDDL(tbl); st.Code() != codes.OK {
+		t.Fatalf("Creating table: %v", st.Err())
+	}
+
+	// Insert some initial data.
+	tx := db.NewTransaction()
+	tx.Start()
+	err := db.Insert(tx, "Tablino", []string{"A"}, []*structpb.ListValue{
+		listV(stringV("1")),
+		listV(stringV("2")),
+		listV(stringV("4")),
+	})
+	if err != nil {
+		t.Fatalf("Inserting data: %v", err)
+	}
+	if _, err := tx.Commit(); err != nil {
+		t.Fatalf("Committing changes: %v", err)
+	}
+
+	// Now insert "3", and query concurrently.
+	q, err := spansql.ParseQuery(`SELECT * FROM Tablino WHERE A > 2`)
+	if err != nil {
+		t.Fatalf("ParseQuery: %v", err)
+	}
+	var out [][]interface{}
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		ri, err := db.Query(q, nil)
+		if err != nil {
+			t.Errorf("Query: %v", err)
+			return
+		}
+		out = slurp(t, ri)
+	}()
+	go func() {
+		defer wg.Done()
+
+		tx := db.NewTransaction()
+		tx.Start()
+		err := db.Insert(tx, "Tablino", []string{"A"}, []*structpb.ListValue{
+			listV(stringV("3")),
+		})
+		if err != nil {
+			t.Errorf("Inserting data: %v", err)
+			return
+		}
+		if _, err := tx.Commit(); err != nil {
+			t.Errorf("Committing changes: %v", err)
+		}
+	}()
+	wg.Wait()
+
+	// We should get either 1 or 2 rows (value 4 should be included, and value 3 might).
+	if n := len(out); n != 1 && n != 2 {
+		t.Fatalf("Concurrent read returned %d rows, want 1 or 2", n)
+	}
+}
+
 func slurp(t *testing.T, ri rowIter) (all [][]interface{}) {
 	t.Helper()
 	for {
@@ -759,6 +878,14 @@ func stringParam(s string) queryParam { return queryParam{Value: s, Type: string
 func intParam(i int64) queryParam     { return queryParam{Value: i, Type: int64Type} }
 func floatParam(f float64) queryParam { return queryParam{Value: f, Type: float64Type} }
 func nullParam() queryParam           { return queryParam{Value: nil} }
+
+func dateParam(s string) queryParam {
+	d, err := civil.ParseDate(s)
+	if err != nil {
+		panic(fmt.Sprintf("bad test date %q: %v", s, err))
+	}
+	return queryParam{Value: d, Type: spansql.Type{Base: spansql.Date}}
+}
 
 func TestRowCmp(t *testing.T) {
 	r := func(x ...interface{}) []interface{} { return x }

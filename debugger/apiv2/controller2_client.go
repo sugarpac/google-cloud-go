@@ -18,7 +18,9 @@ package debugger
 
 import (
 	"context"
+	"fmt"
 	"math"
+	"net/url"
 	"time"
 
 	gax "github.com/googleapis/gax-go/v2"
@@ -29,6 +31,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/metadata"
 )
+
+var newController2ClientHook clientHook
 
 // Controller2CallOptions contains the retry settings for each method of Controller2Client.
 type Controller2CallOptions struct {
@@ -117,7 +121,17 @@ type Controller2Client struct {
 // a completed breakpoint. This functionality is available using the Debugger
 // service.
 func NewController2Client(ctx context.Context, opts ...option.ClientOption) (*Controller2Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultController2ClientOptions(), opts...)...)
+	clientOpts := defaultController2ClientOptions()
+
+	if newController2ClientHook != nil {
+		hookOpts, err := newController2ClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -193,7 +207,8 @@ func (c *Controller2Client) RegisterDebuggee(ctx context.Context, req *clouddebu
 // until the controller removes them from the active list to avoid
 // setting those breakpoints again.
 func (c *Controller2Client) ListActiveBreakpoints(ctx context.Context, req *clouddebuggerpb.ListActiveBreakpointsRequest, opts ...gax.CallOption) (*clouddebuggerpb.ListActiveBreakpointsResponse, error) {
-	ctx = insertMetadata(ctx, c.xGoogMetadata)
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "debuggee_id", url.QueryEscape(req.GetDebuggeeId())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
 	opts = append(c.CallOptions.ListActiveBreakpoints[0:len(c.CallOptions.ListActiveBreakpoints):len(c.CallOptions.ListActiveBreakpoints)], opts...)
 	var resp *clouddebuggerpb.ListActiveBreakpointsResponse
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {
@@ -216,7 +231,8 @@ func (c *Controller2Client) ListActiveBreakpoints(ctx context.Context, req *clou
 // semantics. These may only make changes such as canonicalizing a value
 // or snapping the location to the correct line of code.
 func (c *Controller2Client) UpdateActiveBreakpoint(ctx context.Context, req *clouddebuggerpb.UpdateActiveBreakpointRequest, opts ...gax.CallOption) (*clouddebuggerpb.UpdateActiveBreakpointResponse, error) {
-	ctx = insertMetadata(ctx, c.xGoogMetadata)
+	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v&%s=%v", "debuggee_id", url.QueryEscape(req.GetDebuggeeId()), "breakpoint.id", url.QueryEscape(req.GetBreakpoint().GetId())))
+	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
 	opts = append(c.CallOptions.UpdateActiveBreakpoint[0:len(c.CallOptions.UpdateActiveBreakpoint):len(c.CallOptions.UpdateActiveBreakpoint)], opts...)
 	var resp *clouddebuggerpb.UpdateActiveBreakpointResponse
 	err := gax.Invoke(ctx, func(ctx context.Context, settings gax.CallSettings) error {

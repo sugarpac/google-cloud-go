@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newAutoscalingPolicyClientHook clientHook
+
 // AutoscalingPolicyCallOptions contains the retry settings for each method of AutoscalingPolicyClient.
 type AutoscalingPolicyCallOptions struct {
 	CreateAutoscalingPolicy []gax.CallOption
@@ -118,7 +120,17 @@ type AutoscalingPolicyClient struct {
 // The API interface for managing autoscaling policies in the
 // Cloud Dataproc API.
 func NewAutoscalingPolicyClient(ctx context.Context, opts ...option.ClientOption) (*AutoscalingPolicyClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultAutoscalingPolicyClientOptions(), opts...)...)
+	clientOpts := defaultAutoscalingPolicyClientOptions()
+
+	if newAutoscalingPolicyClientHook != nil {
+		hookOpts, err := newAutoscalingPolicyClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -234,7 +246,7 @@ func (c *AutoscalingPolicyClient) ListAutoscalingPolicies(ctx context.Context, r
 		}
 
 		it.Response = resp
-		return resp.Policies, resp.NextPageToken, nil
+		return resp.GetPolicies(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -245,8 +257,8 @@ func (c *AutoscalingPolicyClient) ListAutoscalingPolicies(ctx context.Context, r
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

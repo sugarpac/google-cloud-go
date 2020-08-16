@@ -37,6 +37,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newClientHook clientHook
+
 // CallOptions contains the retry settings for each method of Client.
 type CallOptions struct {
 	CreateDataset        []gax.CallOption
@@ -230,7 +232,17 @@ type Client struct {
 // On any input that is documented to expect a string parameter in
 // snake_case or kebab-case, either of those cases is accepted.
 func NewClient(ctx context.Context, opts ...option.ClientOption) (*Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultClientOptions(), opts...)...)
+	clientOpts := defaultClientOptions()
+
+	if newClientHook != nil {
+		hookOpts, err := newClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -338,7 +350,7 @@ func (c *Client) ListDatasets(ctx context.Context, req *automlpb.ListDatasetsReq
 		}
 
 		it.Response = resp
-		return resp.Datasets, resp.NextPageToken, nil
+		return resp.GetDatasets(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -349,8 +361,8 @@ func (c *Client) ListDatasets(ctx context.Context, req *automlpb.ListDatasetsReq
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -373,9 +385,9 @@ func (c *Client) UpdateDataset(ctx context.Context, req *automlpb.UpdateDatasetR
 
 // DeleteDataset deletes a dataset and all of its contents.
 // Returns empty response in the
-// [response][google.longrunning.Operation.response] field when it completes,
+// response field when it completes,
 // and delete_details in the
-// [metadata][google.longrunning.Operation.metadata] field.
+// metadata field.
 func (c *Client) DeleteDataset(ctx context.Context, req *automlpb.DeleteDatasetRequest, opts ...gax.CallOption) (*DeleteDatasetOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -400,10 +412,10 @@ func (c *Client) DeleteDataset(ctx context.Context, req *automlpb.DeleteDatasetR
 // For Tables:
 //
 //   A
-//   [schema_inference_version][google.cloud.automl.v1.InputConfig.params]
+//   schema_inference_version
 //   parameter must be explicitly set.
 //   Returns an empty response in the
-//   [response][google.longrunning.Operation.response] field when it completes.
+//   response field when it completes.
 func (c *Client) ImportData(ctx context.Context, req *automlpb.ImportDataRequest, opts ...gax.CallOption) (*ImportDataOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -424,7 +436,7 @@ func (c *Client) ImportData(ctx context.Context, req *automlpb.ImportDataRequest
 
 // ExportData exports dataset’s data to the provided output location.
 // Returns an empty response in the
-// [response][google.longrunning.Operation.response] field when it completes.
+// response field when it completes.
 func (c *Client) ExportData(ctx context.Context, req *automlpb.ExportDataRequest, opts ...gax.CallOption) (*ExportDataOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -461,7 +473,7 @@ func (c *Client) GetAnnotationSpec(ctx context.Context, req *automlpb.GetAnnotat
 }
 
 // CreateModel creates a model.
-// Returns a Model in the [response][google.longrunning.Operation.response]
+// Returns a Model in the response
 // field when it completes.
 // When you create a model, several model evaluations are created for it:
 // a global evaluation, and one evaluation for each annotation spec.
@@ -525,7 +537,7 @@ func (c *Client) ListModels(ctx context.Context, req *automlpb.ListModelsRequest
 		}
 
 		it.Response = resp
-		return resp.Model, resp.NextPageToken, nil
+		return resp.GetModel(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -536,16 +548,16 @@ func (c *Client) ListModels(ctx context.Context, req *automlpb.ListModelsRequest
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
 // DeleteModel deletes a model.
 // Returns google.protobuf.Empty in the
-// [response][google.longrunning.Operation.response] field when it completes,
+// response field when it completes,
 // and delete_details in the
-// [metadata][google.longrunning.Operation.metadata] field.
+// metadata field.
 func (c *Client) DeleteModel(ctx context.Context, req *automlpb.DeleteModelRequest, opts ...gax.CallOption) (*DeleteModelOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -585,14 +597,14 @@ func (c *Client) UpdateModel(ctx context.Context, req *automlpb.UpdateModelReque
 // same parameters has no effect. Deploying with different parametrs
 // (as e.g. changing
 //
-// [node_number][google.cloud.automl.v1p1beta.ImageObjectDetectionModelDeploymentMetadata.node_number])
+// node_number)
 // will reset the deployment state without pausing the model’s availability.
 //
 // Only applicable for Text Classification, Image Object Detection , Tables, and Image Segmentation; all other domains manage
 // deployment automatically.
 //
 // Returns an empty response in the
-// [response][google.longrunning.Operation.response] field when it completes.
+// response field when it completes.
 func (c *Client) DeployModel(ctx context.Context, req *automlpb.DeployModelRequest, opts ...gax.CallOption) (*DeployModelOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -617,7 +629,7 @@ func (c *Client) DeployModel(ctx context.Context, req *automlpb.DeployModelReque
 // all other domains manage deployment automatically.
 //
 // Returns an empty response in the
-// [response][google.longrunning.Operation.response] field when it completes.
+// response field when it completes.
 func (c *Client) UndeployModel(ctx context.Context, req *automlpb.UndeployModelRequest, opts ...gax.CallOption) (*UndeployModelOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -639,10 +651,10 @@ func (c *Client) UndeployModel(ctx context.Context, req *automlpb.UndeployModelR
 // ExportModel exports a trained, “export-able”, model to a user specified Google Cloud
 // Storage location. A model is considered export-able if and only if it has
 // an export format defined for it in
-// [ModelExportOutputConfig][google.cloud.automl.v1.ModelExportOutputConfig].
+// ModelExportOutputConfig.
 //
 // Returns an empty response in the
-// [response][google.longrunning.Operation.response] field when it completes.
+// response field when it completes.
 func (c *Client) ExportModel(ctx context.Context, req *automlpb.ExportModelRequest, opts ...gax.CallOption) (*ExportModelOperation, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "name", url.QueryEscape(req.GetName())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)
@@ -703,7 +715,7 @@ func (c *Client) ListModelEvaluations(ctx context.Context, req *automlpb.ListMod
 		}
 
 		it.Response = resp
-		return resp.ModelEvaluation, resp.NextPageToken, nil
+		return resp.GetModelEvaluation(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -714,8 +726,8 @@ func (c *Client) ListModelEvaluations(ctx context.Context, req *automlpb.ListMod
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 

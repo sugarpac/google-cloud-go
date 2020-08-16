@@ -34,6 +34,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newProfileClientHook clientHook
+
 // ProfileCallOptions contains the retry settings for each method of ProfileClient.
 type ProfileCallOptions struct {
 	ListProfiles   []gax.CallOption
@@ -120,7 +122,17 @@ type ProfileClient struct {
 // A service that handles profile management, including profile CRUD,
 // enumeration and search.
 func NewProfileClient(ctx context.Context, opts ...option.ClientOption) (*ProfileClient, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultProfileClientOptions(), opts...)...)
+	clientOpts := defaultProfileClientOptions()
+
+	if newProfileClientHook != nil {
+		hookOpts, err := newProfileClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -182,7 +194,7 @@ func (c *ProfileClient) ListProfiles(ctx context.Context, req *talentpb.ListProf
 		}
 
 		it.Response = resp
-		return resp.Profiles, resp.NextPageToken, nil
+		return resp.GetProfiles(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -193,8 +205,8 @@ func (c *ProfileClient) ListProfiles(ctx context.Context, req *talentpb.ListProf
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
@@ -269,7 +281,7 @@ func (c *ProfileClient) DeleteProfile(ctx context.Context, req *talentpb.DeleteP
 // For example, search by raw queries “software engineer in Mountain View” or
 // search by structured filters (location filter, education filter, etc.).
 //
-// See [SearchProfilesRequest][google.cloud.talent.v4beta1.SearchProfilesRequest] for more information.
+// See SearchProfilesRequest for more information.
 func (c *ProfileClient) SearchProfiles(ctx context.Context, req *talentpb.SearchProfilesRequest, opts ...gax.CallOption) (*talentpb.SearchProfilesResponse, error) {
 	md := metadata.Pairs("x-goog-request-params", fmt.Sprintf("%s=%v", "parent", url.QueryEscape(req.GetParent())))
 	ctx = insertMetadata(ctx, c.xGoogMetadata, md)

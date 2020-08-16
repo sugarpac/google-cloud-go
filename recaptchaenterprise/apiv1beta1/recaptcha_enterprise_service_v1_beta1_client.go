@@ -32,6 +32,8 @@ import (
 	"google.golang.org/grpc/metadata"
 )
 
+var newRecaptchaEnterpriseServiceV1Beta1ClientHook clientHook
+
 // RecaptchaEnterpriseServiceV1Beta1CallOptions contains the retry settings for each method of RecaptchaEnterpriseServiceV1Beta1Client.
 type RecaptchaEnterpriseServiceV1Beta1CallOptions struct {
 	CreateAssessment   []gax.CallOption
@@ -86,7 +88,17 @@ type RecaptchaEnterpriseServiceV1Beta1Client struct {
 //
 // Service to determine the likelihood an event is legitimate.
 func NewRecaptchaEnterpriseServiceV1Beta1Client(ctx context.Context, opts ...option.ClientOption) (*RecaptchaEnterpriseServiceV1Beta1Client, error) {
-	connPool, err := gtransport.DialPool(ctx, append(defaultRecaptchaEnterpriseServiceV1Beta1ClientOptions(), opts...)...)
+	clientOpts := defaultRecaptchaEnterpriseServiceV1Beta1ClientOptions()
+
+	if newRecaptchaEnterpriseServiceV1Beta1ClientHook != nil {
+		hookOpts, err := newRecaptchaEnterpriseServiceV1Beta1ClientHook(ctx, clientHookParams{})
+		if err != nil {
+			return nil, err
+		}
+		clientOpts = append(clientOpts, hookOpts...)
+	}
+
+	connPool, err := gtransport.DialPool(ctx, append(clientOpts, opts...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -200,7 +212,7 @@ func (c *RecaptchaEnterpriseServiceV1Beta1Client) ListKeys(ctx context.Context, 
 		}
 
 		it.Response = resp
-		return resp.Keys, resp.NextPageToken, nil
+		return resp.GetKeys(), resp.GetNextPageToken(), nil
 	}
 	fetch := func(pageSize int, pageToken string) (string, error) {
 		items, nextPageToken, err := it.InternalFetch(pageSize, pageToken)
@@ -211,8 +223,8 @@ func (c *RecaptchaEnterpriseServiceV1Beta1Client) ListKeys(ctx context.Context, 
 		return nextPageToken, nil
 	}
 	it.pageInfo, it.nextFunc = iterator.NewPageInfo(fetch, it.bufLen, it.takeBuf)
-	it.pageInfo.MaxSize = int(req.PageSize)
-	it.pageInfo.Token = req.PageToken
+	it.pageInfo.MaxSize = int(req.GetPageSize())
+	it.pageInfo.Token = req.GetPageToken()
 	return it
 }
 
